@@ -144,26 +144,34 @@ public class RideController {
 
     @PostMapping("/find")
     public ResponseEntity<List<RideResponse>> findRides(
-            @RequestBody FindRideRequest request
+            @RequestBody FindRideRequest request,
+            Authentication authentication
     ) {
 
+        User passenger = getAuthenticatedUser(authentication);
+
         log.info(
-                "Ride search started: seats={}, departureTime={}",
+                "Ride search started: passengerId={}, seats={}, departureTime={}",
+                passenger.getId(),
                 request.seats(),
                 request.departureTime()
         );
 
         /*
          * STEP 1
+         *
          * Retrieve active rides and apply inexpensive filters first.
          *
-         * We deliberately do this before calling the routing service.
-         * This prevents unnecessary ORS requests and improves performance.
+         * A passenger must never see their own rides as matching
+         * rides because they cannot request their own ride.
          */
         List<Ride> candidates =
                 rideRepository
                         .findByStatus("ACTIVE")
                         .stream()
+                        .filter(ride ->
+                                !ride.getDriver().getId().equals(passenger.getId())
+                        )
                         .filter(ride ->
                                 hasEnoughSeats(
                                         ride,
@@ -195,6 +203,7 @@ public class RideController {
 
         /*
          * STEP 2
+         *
          * Calculate the passenger route.
          *
          * ORS is treated as an enhancement, not a hard dependency.
@@ -206,6 +215,7 @@ public class RideController {
 
         /*
          * STEP 3
+         *
          * Calculate the compatibility score for each candidate.
          */
         List<RideResponse> results =
