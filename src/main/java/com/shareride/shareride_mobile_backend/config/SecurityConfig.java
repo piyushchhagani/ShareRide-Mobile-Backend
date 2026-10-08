@@ -1,6 +1,6 @@
 package com.shareride.shareride_mobile_backend.config;
 
-import com.shareride.shareride_mobile_backend.auth.JwtAuthenticationFilter;
+import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -10,13 +10,15 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
+import jakarta.servlet.Filter;
+
 @Configuration
 public class SecurityConfig {
 
-    private final JwtAuthenticationFilter jwtAuthenticationFilter;
+    private final ApplicationContext applicationContext;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtAuthenticationFilter) {
-        this.jwtAuthenticationFilter = jwtAuthenticationFilter;
+    public SecurityConfig(ApplicationContext applicationContext) {
+        this.applicationContext = applicationContext;
     }
 
     @Bean
@@ -27,6 +29,13 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http)
             throws Exception {
+
+        Filter jwtAuthenticationFilter = applicationContext.getBeansOfType(Filter.class)
+                .values()
+                .stream()
+                .filter(filter -> filter.getClass().getSimpleName().equals("JwtAuthenticationFilter"))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException("JWT authentication filter bean not found"));
 
         http
             .csrf(csrf -> csrf.disable())
