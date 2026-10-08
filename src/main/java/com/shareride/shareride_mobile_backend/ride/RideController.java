@@ -322,14 +322,19 @@ public class RideController {
 
         try {
 
-            RouteResponse route =
-                    routeService.calculateRoute(routeRequest);
+            RouteService.RouteResult routeResult =
+                    routeService.calculateRoute(
+                            request.pickupLatitude(),
+                            request.pickupLongitude(),
+                            request.destinationLatitude(),
+                            request.destinationLongitude()
+                    );
 
             log.info(
                     "Passenger route calculated successfully using routing service."
             );
 
-            return route;
+            return toRouteResponse(routeResult);
 
         } catch (Exception exception) {
 
@@ -463,6 +468,29 @@ public class RideController {
     // -------------------------------------------------------------------------
     // RESPONSE MAPPING
     // -------------------------------------------------------------------------
+
+    private RouteResponse toRouteResponse(
+            RouteService.RouteResult routeResult
+    ) {
+
+        List<List<Double>> coordinates =
+                routeResult
+                        .getPoints()
+                        .stream()
+                        .map(point ->
+                                List.of(
+                                        point.getLongitude(),
+                                        point.getLatitude()
+                                )
+                        )
+                        .toList();
+
+        return new RouteResponse(
+                routeResult.getDistanceMeters(),
+                routeResult.getDurationSeconds(),
+                coordinates
+        );
+    }
 
     private RideResponse toResponse(
             Ride ride

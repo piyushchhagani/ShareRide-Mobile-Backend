@@ -47,13 +47,14 @@ public class SecurityConfig {
 
             .authorizeHttpRequests(auth -> auth
 
+                    // Public authentication endpoints
                     .requestMatchers(
                             "/api/auth/login",
-                            "/api/auth/register",
-                            "/api/auth/reset-test-password"
+                            "/api/auth/register"
                     )
                     .permitAll()
 
+                    // Protected ride APIs
                     .requestMatchers(
                             "/api/rides/find"
                     )
@@ -65,12 +66,14 @@ public class SecurityConfig {
                     )
                     .authenticated()
 
+                    // Protected routing API
                     .requestMatchers(
                             "/api/routes",
                             "/api/routes/**"
                     )
                     .authenticated()
 
+                    // Everything else requires authentication
                     .anyRequest()
                     .authenticated()
             )

@@ -137,8 +137,20 @@ public class RouteMatchingService {
 
         try {
 
+            RouteService.RouteResult routeResult =
+                    routeService.calculateRoute(
+                            ride.getPickupLatitude(),
+                            ride.getPickupLongitude(),
+                            ride.getDestinationLatitude(),
+                            ride.getDestinationLongitude()
+                    );
+
             RouteResponse route =
-                    routeService.calculateRoute(request);
+                    new RouteResponse(
+                            extractDistanceMeters(routeResult),
+                            extractDurationSeconds(routeResult),
+                            extractCoordinates(routeResult)
+                    );
 
             log.debug(
                     "Driver route calculated using routing service: rideId={}",
@@ -313,6 +325,121 @@ public class RouteMatchingService {
         if (distance <= 10.0) return 25;
 
         return 0;
+    }
+
+    private double extractDistanceMeters(
+            RouteService.RouteResult routeResult
+    ) {
+        return extractNumericValue(
+                routeResult,
+                "distanceMeters",
+                "distance",
+                "distanceKm",
+                "distanceInMeters",
+                "distanceValue"
+        );
+    }
+
+    private double extractDurationSeconds(
+            RouteService.RouteResult routeResult
+    ) {
+        return extractNumericValue(
+                routeResult,
+                "durationSeconds",
+                "duration",
+                "durationInSeconds",
+                "estimatedSeconds",
+                "timeSeconds",
+                "seconds"
+        );
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<List<Double>> extractCoordinates(
+            RouteService.RouteResult routeResult
+    ) {
+        Object value =
+                extractValue(
+                        routeResult,
+                        "coordinates",
+                        "routeCoordinates",
+                        "points",
+                        "path"
+                );
+
+        if (value instanceof List<?>) {
+            return (List<List<Double>>) value;
+        }
+
+        return java.util.Collections.emptyList();
+    }
+
+    private double extractNumericValue(
+            Object target,
+            String... candidateNames
+    ) {
+        Object value =
+                extractValue(
+                        target,
+                        candidateNames
+                );
+
+        if (value instanceof Number number) {
+            return number.doubleValue();
+        }
+
+        return 0.0;
+    }
+
+    private Object extractValue(
+            Object target,
+            String... candidateNames
+    ) {
+        if (target == null) {
+            return null;
+        }
+
+        Class<?> targetClass = target.getClass();
+
+        for (String candidateName : candidateNames) {
+            String capitalized =
+                    Character.toUpperCase(candidateName.charAt(0))
+                            + candidateName.substring(1);
+
+            for (String methodName : new String[] {
+                    candidateName,
+                    "get" + capitalized,
+                    "is" + capitalized
+            }) {
+                try {
+                    java.lang.reflect.Method method =
+                            targetClass.getMethod(methodName);
+                    Object value = method.invoke(target);
+                    if (value != null) {
+                        return value;
+                    }
+                } catch (NoSuchMethodException
+                         | IllegalAccessException
+                         | java.lang.reflect.InvocationTargetException ignored) {
+                    // Ignore and continue to the next candidate.
+                }
+            }
+
+            try {
+                java.lang.reflect.Field field =
+                        targetClass.getDeclaredField(candidateName);
+                field.setAccessible(true);
+                Object value = field.get(target);
+                if (value != null) {
+                    return value;
+                }
+            } catch (NoSuchFieldException
+                     | IllegalAccessException ignored) {
+                // Ignore and continue to the next candidate.
+            }
+        }
+
+        return null;
     }
 
     private RouteResponse createFallbackRoute(
