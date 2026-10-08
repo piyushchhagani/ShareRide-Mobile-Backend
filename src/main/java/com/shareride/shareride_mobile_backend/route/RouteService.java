@@ -1,5 +1,8 @@
 package com.shareride.shareride_mobile_backend.route;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,6 +25,7 @@ public class RouteService {
             LoggerFactory.getLogger(RouteService.class);
 
     private final RestTemplate restTemplate;
+    private final ObjectMapper objectMapper;
 
     @Value("${ors.api.key}")
     private String apiKey;
@@ -29,18 +33,17 @@ public class RouteService {
     @Value("${ors.base-url}")
     private String baseUrl;
 
-    public RouteService(
-            RestTemplate restTemplate
-    ) {
-        this.restTemplate = restTemplate;
+    public RouteService(ObjectMapper objectMapper) {
+        this.restTemplate = new RestTemplate();
+        this.objectMapper = objectMapper;
     }
 
     public RouteResponse calculateRoute(RouteRequest request) {
 
         /*
-         * Keep ors.base-url as:
+         * Keep application.properties as:
          *
-         * https://api.heigit.org
+         * ors.base-url=https://api.heigit.org
          *
          * The openrouteservice path is added here.
          */
@@ -66,9 +69,6 @@ public class RouteService {
                     MediaType.APPLICATION_JSON
             );
 
-            /*
-             * Request GeoJSON response.
-             */
             headers.setAccept(
                     List.of(
                             MediaType.valueOf("application/geo+json"),
@@ -76,26 +76,25 @@ public class RouteService {
                     )
             );
 
-            /*
-             * ORS / HeiGIT API key.
-             */
             headers.set(
                     "Authorization",
                     apiKey
             );
 
-            String body = String.format(
-                    "{\n"
-                            + "  \"coordinates\": [\n"
-                            + "    [%s, %s],\n"
-                            + "    [%s, %s]\n"
-                            + "  ]\n"
-                            + "}",
-                    request.pickupLongitude(),
-                    request.pickupLatitude(),
-                    request.destinationLongitude(),
-                    request.destinationLatitude()
-            );
+            String body =
+                    """
+                    {
+                      "coordinates": [
+                        [%s, %s],
+                        [%s, %s]
+                      ]
+                    }
+                    """.formatted(
+                            request.pickupLongitude(),
+                            request.pickupLatitude(),
+                            request.destinationLongitude(),
+                            request.destinationLatitude()
+                    );
 
             HttpEntity<String> entity =
                     new HttpEntity<>(
@@ -103,7 +102,7 @@ public class RouteService {
                             headers
                     );
 
-            log.debug(
+            log.info(
                     "ORS request URL: {}",
                     url
             );
@@ -169,17 +168,34 @@ public class RouteService {
 
         try {
 
+            JsonNode root =
+                    objectMapper.readTree(responseBody);
+
+            JsonNode feature =
+                    root.path("features")
+                            .path(0);
+
+            if (feature.isMissingNode() ||
+                    feature.isNull()) {
+
+                throw new IllegalStateException(
+                        "No route feature returned by ORS."
+                );
+            }
+
+            JsonNode properties =
+                    feature.path("properties");
+
+            JsonNode summary =
+                    properties.path("summary");
+
             double distanceMeters =
-                    extractDoubleValue(
-                            responseBody,
-                            "\"distance\""
-                    );
+                    summary.path("distance")
+                            .asDouble();
 
             double durationSeconds =
-                    extractDoubleValue(
-                            responseBody,
-                            "\"duration\""
-                    );
+                    summary.path("duration")
+                            .asDouble();
 
             if (distanceMeters <= 0 ||
                     durationSeconds <= 0) {
@@ -189,8 +205,36 @@ public class RouteService {
                 );
             }
 
+            JsonNode coordinates =
+                    feature
+                            .path("geometry")
+                            .path("coordinates");
+
             List<List<Double>> routeCoordinates =
-                    extractRouteCoordinates(responseBody);
+                    new ArrayList<>();
+
+            if (coordinates.isArray()) {
+
+                for (JsonNode coordinate : coordinates) {
+
+                    if (coordinate.isArray()
+                            && coordinate.size() >= 2) {
+
+                        List<Double> point =
+                                List.of(
+                                        coordinate
+                                                .get(0)
+                                                .asDouble(),
+
+                                        coordinate
+                                                .get(1)
+                                                .asDouble()
+                                );
+
+                        routeCoordinates.add(point);
+                    }
+                }
+            }
 
             if (routeCoordinates.isEmpty()) {
 
@@ -226,195 +270,5 @@ public class RouteService {
                     exception
             );
         }
-    }
-
-    private double extractDoubleValue(
-            String json,
-            String fieldName
-    ) {
-
-        int fieldIndex = json.indexOf(fieldName);
-
-        if (fieldIndex < 0) {
-            return -1;
-        }
-
-        int valueIndex = json.indexOf(':', fieldIndex);
-
-        if (valueIndex < 0) {
-            return -1;
-        }
-
-        int cursor = valueIndex + 1;
-
-        while (cursor < json.length() &&
-                Character.isWhitespace(json.charAt(cursor))) {
-            cursor++;
-        }
-
-        int start = cursor;
-
-        while (cursor < json.length() &&
-                (
-                        Character.isDigit(json.charAt(cursor)) ||
-                                json.charAt(cursor) == '-' ||
-                                json.charAt(cursor) == '+' ||
-                                json.charAt(cursor) == '.' ||
-                                json.charAt(cursor) == 'e' ||
-                                json.charAt(cursor) == 'E'
-                )) {
-            cursor++;
-        }
-
-        if (start == cursor) {
-            return -1;
-        }
-
-        return Double.parseDouble(
-                json.substring(start, cursor)
-        );
-    }
-
-    private List<List<Double>> extractRouteCoordinates(
-            String json
-    ) {
-
-        int coordinatesIndex = json.indexOf("\"coordinates\"");
-
-        if (coordinatesIndex < 0) {
-            return new ArrayList<>();
-        }
-
-        int arrayStart = json.indexOf('[', coordinatesIndex);
-
-        if (arrayStart < 0) {
-            return new ArrayList<>();
-        }
-
-        List<List<Double>> routeCoordinates =
-                new ArrayList<>();
-
-        int cursor = arrayStart;
-
-        while (cursor < json.length()) {
-
-            while (cursor < json.length() &&
-                    Character.isWhitespace(json.charAt(cursor))) {
-                cursor++;
-            }
-
-            if (cursor >= json.length()) {
-                break;
-            }
-
-            if (json.charAt(cursor) == ']') {
-                break;
-            }
-
-            if (json.charAt(cursor) != '[') {
-                cursor++;
-                continue;
-            }
-
-            int end = findMatchingBracket(json, cursor);
-
-            if (end < 0) {
-                break;
-            }
-
-            String coordinateBlock =
-                    json.substring(cursor, end + 1);
-
-            List<Double> point =
-                    parseCoordinatePoint(coordinateBlock);
-
-            if (point != null) {
-                routeCoordinates.add(point);
-            }
-
-            cursor = end + 1;
-        }
-
-        return routeCoordinates;
-    }
-
-    private List<Double> parseCoordinatePoint(
-            String coordinateBlock
-    ) {
-
-        List<Double> numbers = new ArrayList<>();
-        int cursor = 0;
-
-        while (cursor < coordinateBlock.length()) {
-
-            while (cursor < coordinateBlock.length() &&
-                    Character.isWhitespace(coordinateBlock.charAt(cursor))) {
-                cursor++;
-            }
-
-            if (cursor >= coordinateBlock.length()) {
-                break;
-            }
-
-            if (coordinateBlock.charAt(cursor) == '[' ||
-                    coordinateBlock.charAt(cursor) == ']') {
-                cursor++;
-                continue;
-            }
-
-            int start = cursor;
-
-            while (cursor < coordinateBlock.length() &&
-                    (
-                            Character.isDigit(coordinateBlock.charAt(cursor)) ||
-                                    coordinateBlock.charAt(cursor) == '-' ||
-                                    coordinateBlock.charAt(cursor) == '+' ||
-                                    coordinateBlock.charAt(cursor) == '.' ||
-                                    coordinateBlock.charAt(cursor) == 'e' ||
-                                    coordinateBlock.charAt(cursor) == 'E'
-                    )) {
-                cursor++;
-            }
-
-            if (start == cursor) {
-                cursor++;
-                continue;
-            }
-
-            numbers.add(
-                    Double.parseDouble(
-                            coordinateBlock.substring(start, cursor)
-                    )
-            );
-        }
-
-        if (numbers.size() < 2) {
-            return null;
-        }
-
-        return List.of(numbers.get(0), numbers.get(1));
-    }
-
-    private int findMatchingBracket(
-            String json,
-            int startIndex
-    ) {
-
-        int depth = 0;
-
-        for (int i = startIndex; i < json.length(); i++) {
-            char current = json.charAt(i);
-
-            if (current == '[') {
-                depth++;
-            } else if (current == ']') {
-                depth--;
-                if (depth == 0) {
-                    return i;
-                }
-            }
-        }
-
-        return -1;
     }
 }
