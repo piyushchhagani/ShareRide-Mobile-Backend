@@ -1,5 +1,6 @@
 package com.shareride.shareride_mobile_backend.auth;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import javax.crypto.Mac;
@@ -13,11 +14,7 @@ import java.util.regex.Pattern;
 @Service
 public class JwtService {
 
-    private static final String SECRET =
-            "ShareRideMobileBackendSecretKey2026VerySecure123456789";
-
     private static final String HMAC_ALGORITHM = "HmacSHA256";
-
     private static final long EXPIRATION_TIME_MS = 86_400_000L;
 
     private static final Pattern SUBJECT_PATTERN =
@@ -26,10 +23,27 @@ public class JwtService {
     private static final Pattern EXPIRATION_PATTERN =
             Pattern.compile("\"exp\":(\\d+)");
 
-    private final SecretKeySpec key = new SecretKeySpec(
-            SECRET.getBytes(StandardCharsets.UTF_8),
-            HMAC_ALGORITHM
-    );
+    private final SecretKeySpec key;
+
+    public JwtService(@Value("${jwt.secret}") String secret) {
+
+        if (secret == null || secret.isBlank()) {
+            throw new IllegalStateException(
+                    "JWT_SECRET is not configured."
+            );
+        }
+
+        if (secret.length() < 32) {
+            throw new IllegalStateException(
+                    "JWT_SECRET must contain at least 32 characters."
+            );
+        }
+
+        this.key = new SecretKeySpec(
+                secret.getBytes(StandardCharsets.UTF_8),
+                HMAC_ALGORITHM
+        );
+    }
 
     public String generateToken(String email) {
 
@@ -122,7 +136,6 @@ public class JwtService {
         try {
 
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
-
             mac.init(key);
 
             return mac.doFinal(
