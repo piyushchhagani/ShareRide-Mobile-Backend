@@ -5,13 +5,27 @@ import com.shareride.shareride_mobile_backend.route.RouteResponse;
 import com.shareride.shareride_mobile_backend.route.RouteService;
 import com.shareride.shareride_mobile_backend.user.User;
 import com.shareride.shareride_mobile_backend.user.UserRepository;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.Duration;
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/rides")
 public class RideController {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(RideController.class);
+
+    private static final long MAX_DEPARTURE_DIFFERENCE_MINUTES = 60;
+    private static final double MIN_MATCH_SCORE = 35.0;
+    private static final double FALLBACK_AVERAGE_SPEED_KMH = 30.0;
+    private static final double EARTH_RADIUS_METERS = 6_371_000.0;
 
     private final RideRepository rideRepository;
     private final UserRepository userRepository;
@@ -30,15 +44,17 @@ public class RideController {
         this.routeMatchingService = routeMatchingService;
     }
 
+    // -------------------------------------------------------------------------
+    // CREATE RIDE
+    // -------------------------------------------------------------------------
+
     @PostMapping
-    public ResponseEntity<?> createRide(
+    public ResponseEntity<RideResponse> createRide(
             @RequestBody CreateRideRequest request,
             Authentication authentication
     ) {
 
-        User driver = userRepository
-                .findByEmail(authentication.getName())
-                .orElseThrow();
+        User driver = getAuthenticatedUser(authentication);
 
         Ride ride = new Ride();
 
@@ -58,130 +74,389 @@ public class RideController {
         ride.setVehicleType(request.vehicleType());
         ride.setVehicleNumber(request.vehicleNumber());
 
-        Ride saved = rideRepository.save(ride);
+        Ride savedRide = rideRepository.save(ride);
 
-        return ResponseEntity.ok(toResponse(saved));
+        log.info(
+                "Ride created successfully: rideId={}, driverId={}",
+                savedRide.getId(),
+                driver.getId()
+        );
+
+        return ResponseEntity.ok(toResponse(savedRide));
     }
+
+    // -------------------------------------------------------------------------
+    // GET RIDE BY ID
+    // -------------------------------------------------------------------------
+
     @GetMapping("/{rideId}")
-        public ResponseEntity<?> getRide(@PathVariable Long rideId) {
-        return rideRepository.findById(rideId)
+    public ResponseEntity<RideResponse> getRide(
+            @PathVariable Long rideId
+    ) {
+
+        return rideRepository
+                .findById(rideId)
                 .map(ride -> ResponseEntity.ok(toResponse(ride)))
                 .orElseGet(() -> ResponseEntity.notFound().build());
-        }
- 
-    @GetMapping
-    public ResponseEntity<?> getAllRides() {
+    }
 
-        return ResponseEntity.ok(
+    // -------------------------------------------------------------------------
+    // GET ALL ACTIVE RIDES
+    // -------------------------------------------------------------------------
+
+    @GetMapping
+    public ResponseEntity<List<RideResponse>> getAllRides() {
+
+        List<RideResponse> rides =
                 rideRepository
                         .findByStatusOrderByDepartureTimeAsc("ACTIVE")
                         .stream()
                         .map(this::toResponse)
-                        .toList()
-        );
+                        .toList();
+
+        return ResponseEntity.ok(rides);
     }
 
+    // -------------------------------------------------------------------------
+    // GET CURRENT USER'S RIDES
+    // -------------------------------------------------------------------------
+
     @GetMapping("/mine")
-    public ResponseEntity<?> myRides(
+    public ResponseEntity<List<RideResponse>> getMyRides(
             Authentication authentication
     ) {
 
-        User driver = userRepository
-                .findByEmail(authentication.getName())
-                .orElseThrow();
+        User driver = getAuthenticatedUser(authentication);
 
-        return ResponseEntity.ok(
+        List<RideResponse> rides =
                 rideRepository
                         .findByDriverId(driver.getId())
                         .stream()
                         .map(this::toResponse)
-                        .toList()
-        );
+                        .toList();
+
+        return ResponseEntity.ok(rides);
     }
 
+    // -------------------------------------------------------------------------
+    // FIND MATCHING RIDES
+    // -------------------------------------------------------------------------
+
     @PostMapping("/find")
-    public ResponseEntity<?> findRides(
+    public ResponseEntity<List<RideResponse>> findRides(
             @RequestBody FindRideRequest request
     ) {
 
-        RouteResponse passengerRoute =
-                routeService.calculateRoute(
-                        new RouteRequest(
-                                request.pickupLatitude(),
-                                request.pickupLongitude(),
-                                request.destinationLatitude(),
-                                request.destinationLongitude()
-                        )
-                );
+        log.info(
+                "Ride search started: seats={}, departureTime={}",
+                request.seats(),
+                request.departureTime()
+        );
 
-        var results = rideRepository
-                .findByStatus("ACTIVE")
-                .stream()
-
-                .filter(ride ->
-                        ride.getAvailableSeats()
-                                >= request.seats()
-                )
-
-                .filter(ride -> {
-
-                    long minutes =
-                            Math.abs(
-                                    java.time.Duration.between(
-                                            ride.getDepartureTime(),
-                                            request.departureTime()
-                                    ).toMinutes()
-                            );
-
-                    return minutes <= 60;
-                })
-
-                .map(ride -> {
-
-                    MatchScore score =
-                            routeMatchingService.calculate(
-                                    ride,
-                                    passengerRoute,
-                                    request.departureTime()
-                            );
-
-                    return new ScoredRide(
-                            ride,
-                            score
-                    );
-                })
-
-                .filter(result ->
-                        result.score().totalScore() >= 35
-                )
-
-                .sorted(
-                        (a, b) ->
-                                Double.compare(
-                                        b.score().totalScore(),
-                                        a.score().totalScore()
+        /*
+         * STEP 1
+         * Retrieve active rides and apply inexpensive filters first.
+         *
+         * We deliberately do this before calling the routing service.
+         * This prevents unnecessary ORS requests and improves performance.
+         */
+        List<Ride> candidates =
+                rideRepository
+                        .findByStatus("ACTIVE")
+                        .stream()
+                        .filter(ride ->
+                                hasEnoughSeats(
+                                        ride,
+                                        request.seats()
                                 )
-                )
-
-                .map(result ->
-                        toResponse(
-                                result.ride(),
-                                result.score()
                         )
-                )
+                        .filter(ride ->
+                                isWithinDepartureWindow(
+                                        ride,
+                                        request.departureTime()
+                                )
+                        )
+                        .toList();
 
-                .toList();
+        log.info(
+                "Ride search candidates: {}",
+                candidates.size()
+        );
+
+        /*
+         * No suitable rides means there is nothing to score.
+         */
+        if (candidates.isEmpty()) {
+
+            log.info("No rides matched basic search criteria.");
+
+            return ResponseEntity.ok(List.of());
+        }
+
+        /*
+         * STEP 2
+         * Calculate the passenger route.
+         *
+         * ORS is treated as an enhancement, not a hard dependency.
+         * If ORS is unavailable, the matching process continues using
+         * a straight-line fallback route.
+         */
+        RouteResponse passengerRoute =
+                calculatePassengerRoute(request);
+
+        /*
+         * STEP 3
+         * Calculate the compatibility score for each candidate.
+         */
+        List<RideResponse> results =
+                candidates
+                        .stream()
+                        .map(ride ->
+                                scoreRide(
+                                        ride,
+                                        passengerRoute,
+                                        request
+                                )
+                        )
+                        .filter(scoredRide ->
+                                scoredRide.score().totalScore()
+                                        >= MIN_MATCH_SCORE
+                        )
+                        .sorted(
+                                (first, second) ->
+                                        Double.compare(
+                                                second.score().totalScore(),
+                                                first.score().totalScore()
+                                        )
+                        )
+                        .map(scoredRide ->
+                                toResponse(
+                                        scoredRide.ride(),
+                                        scoredRide.score()
+                                )
+                        )
+                        .toList();
+
+        log.info(
+                "Ride search completed: candidates={}, matches={}",
+                candidates.size(),
+                results.size()
+        );
 
         return ResponseEntity.ok(results);
     }
 
-    private record ScoredRide(
+    // -------------------------------------------------------------------------
+    // MATCHING HELPERS
+    // -------------------------------------------------------------------------
+
+    private boolean hasEnoughSeats(
             Ride ride,
-            MatchScore score
+            int requestedSeats
     ) {
+
+        return ride.getAvailableSeats() >= requestedSeats;
     }
 
-    private RideResponse toResponse(Ride ride) {
+    private boolean isWithinDepartureWindow(
+            Ride ride,
+            java.time.LocalDateTime requestedDepartureTime
+    ) {
+
+        long differenceMinutes =
+                Math.abs(
+                        Duration.between(
+                                ride.getDepartureTime(),
+                                requestedDepartureTime
+                        ).toMinutes()
+                );
+
+        return differenceMinutes
+                <= MAX_DEPARTURE_DIFFERENCE_MINUTES;
+    }
+
+    private ScoredRide scoreRide(
+            Ride ride,
+            RouteResponse passengerRoute,
+            FindRideRequest request
+    ) {
+
+        MatchScore score =
+                routeMatchingService.calculate(
+                        ride,
+                        passengerRoute,
+                        request.departureTime()
+                );
+
+        return new ScoredRide(
+                ride,
+                score
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // ROUTE CALCULATION
+    // -------------------------------------------------------------------------
+
+    private RouteResponse calculatePassengerRoute(
+            FindRideRequest request
+    ) {
+
+        RouteRequest routeRequest =
+                new RouteRequest(
+                        request.pickupLatitude(),
+                        request.pickupLongitude(),
+                        request.destinationLatitude(),
+                        request.destinationLongitude()
+                );
+
+        try {
+
+            RouteResponse route =
+                    routeService.calculateRoute(routeRequest);
+
+            log.info(
+                    "Passenger route calculated successfully using routing service."
+            );
+
+            return route;
+
+        } catch (Exception exception) {
+
+            log.warn(
+                    "Routing service unavailable. " +
+                    "Using fallback route. reason={}",
+                    exception.getMessage()
+            );
+
+            return createFallbackRoute(routeRequest);
+        }
+    }
+
+    /**
+     * Creates a straight-line route when the external routing service
+     * is unavailable.
+     *
+     * This fallback is intentionally simple. It keeps ride matching
+     * functional but should not be used for navigation.
+     */
+    private RouteResponse createFallbackRoute(
+            RouteRequest request
+    ) {
+
+        double distanceMeters =
+                calculateHaversineDistance(
+                        request.pickupLatitude(),
+                        request.pickupLongitude(),
+                        request.destinationLatitude(),
+                        request.destinationLongitude()
+                );
+
+        double durationSeconds =
+                calculateFallbackDuration(distanceMeters);
+
+        List<List<Double>> coordinates =
+                List.of(
+                        List.of(
+                                request.pickupLongitude(),
+                                request.pickupLatitude()
+                        ),
+                        List.of(
+                                request.destinationLongitude(),
+                                request.destinationLatitude()
+                        )
+                );
+
+        log.debug(
+                "Fallback route created: distanceMeters={}, durationSeconds={}",
+                distanceMeters,
+                durationSeconds
+        );
+
+        return new RouteResponse(
+                distanceMeters,
+                durationSeconds,
+                coordinates
+        );
+    }
+
+    private double calculateFallbackDuration(
+            double distanceMeters
+    ) {
+
+        return (
+                distanceMeters / 1_000.0
+        ) / FALLBACK_AVERAGE_SPEED_KMH * 3_600.0;
+    }
+
+    /**
+     * Haversine distance between two geographic coordinates.
+     */
+    private double calculateHaversineDistance(
+            double latitude1,
+            double longitude1,
+            double latitude2,
+            double longitude2
+    ) {
+
+        double latitude1Radians =
+                Math.toRadians(latitude1);
+
+        double latitude2Radians =
+                Math.toRadians(latitude2);
+
+        double latitudeDifference =
+                Math.toRadians(latitude2 - latitude1);
+
+        double longitudeDifference =
+                Math.toRadians(longitude2 - longitude1);
+
+        double a =
+                Math.pow(
+                        Math.sin(latitudeDifference / 2),
+                        2
+                )
+                +
+                Math.cos(latitude1Radians)
+                        * Math.cos(latitude2Radians)
+                        * Math.pow(
+                                Math.sin(longitudeDifference / 2),
+                                2
+                        );
+
+        double c =
+                2 * Math.atan2(
+                        Math.sqrt(a),
+                        Math.sqrt(1 - a)
+                );
+
+        return EARTH_RADIUS_METERS * c;
+    }
+
+    // -------------------------------------------------------------------------
+    // USER
+    // -------------------------------------------------------------------------
+
+    private User getAuthenticatedUser(
+            Authentication authentication
+    ) {
+
+        return userRepository
+                .findByEmail(authentication.getName())
+                .orElseThrow(
+                        () -> new IllegalStateException(
+                                "Authenticated user was not found."
+                        )
+                );
+    }
+
+    // -------------------------------------------------------------------------
+    // RESPONSE MAPPING
+    // -------------------------------------------------------------------------
+
+    private RideResponse toResponse(
+            Ride ride
+    ) {
 
         return new RideResponse(
                 ride.getId(),
@@ -248,5 +523,15 @@ public class RideController {
                 score.destinationScore(),
                 score.detourScore()
         );
+    }
+
+    // -------------------------------------------------------------------------
+    // INTERNAL RESULT TYPE
+    // -------------------------------------------------------------------------
+
+    private record ScoredRide(
+            Ride ride,
+            MatchScore score
+    ) {
     }
 }

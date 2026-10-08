@@ -3,6 +3,9 @@ package com.shareride.shareride_mobile_backend.ride;
 import com.shareride.shareride_mobile_backend.route.RouteRequest;
 import com.shareride.shareride_mobile_backend.route.RouteResponse;
 import com.shareride.shareride_mobile_backend.route.RouteService;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -11,6 +14,24 @@ import java.util.List;
 
 @Service
 public class RouteMatchingService {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(RouteMatchingService.class);
+
+    private static final double ROUTE_WEIGHT = 0.40;
+    private static final double TIME_WEIGHT = 0.20;
+    private static final double PICKUP_WEIGHT = 0.15;
+    private static final double DESTINATION_WEIGHT = 0.10;
+    private static final double DETOUR_WEIGHT = 0.15;
+
+    /*
+     * A 1-meter threshold is too strict for route comparison.
+     * 500 meters gives us a practical similarity comparison
+     * while still being meaningful for campus ride sharing.
+     */
+    private static final double ROUTE_MATCH_THRESHOLD_METERS = 500.0;
+
+    private static final double FALLBACK_SPEED_KMH = 30.0;
 
     private final RouteService routeService;
 
@@ -25,65 +46,118 @@ public class RouteMatchingService {
     ) {
 
         RouteResponse driverRoute =
-                routeService.calculateRoute(
-                        new RouteRequest(
-                                ride.getPickupLatitude(),
-                                ride.getPickupLongitude(),
-                                ride.getDestinationLatitude(),
-                                ride.getDestinationLongitude()
-                        )
+                calculateDriverRoute(ride);
+
+        double routeScore =
+                calculateRouteSimilarity(
+                        passengerRoute.coordinates(),
+                        driverRoute.coordinates()
                 );
 
-        double routeScore = calculateRouteSimilarity(
-                passengerRoute.coordinates(),
-                driverRoute.coordinates()
-        );
+        double pickupScore =
+                calculateDistanceScore(
+                        ride.getPickupLatitude(),
+                        ride.getPickupLongitude(),
+                        passengerRoute.coordinates()
+                                .get(0)
+                                .get(1),
+                        passengerRoute.coordinates()
+                                .get(0)
+                                .get(0)
+                );
 
-        double pickupScore = calculateDistanceScore(
-                ride.getPickupLatitude(),
-                ride.getPickupLongitude(),
-                passengerRoute.coordinates().get(0).get(1),
-                passengerRoute.coordinates().get(0).get(0)
-        );
-
-        List<Double> destination =
+        List<Double> passengerDestination =
                 passengerRoute.coordinates()
                         .get(
                                 passengerRoute.coordinates().size() - 1
                         );
 
-        double destinationScore = calculateDistanceScore(
-                ride.getDestinationLatitude(),
-                ride.getDestinationLongitude(),
-                destination.get(1),
-                destination.get(0)
-        );
+        double destinationScore =
+                calculateDistanceScore(
+                        ride.getDestinationLatitude(),
+                        ride.getDestinationLongitude(),
+                        passengerDestination.get(1),
+                        passengerDestination.get(0)
+                );
 
-        double timeScore = calculateTimeScore(
-                ride.getDepartureTime(),
-                requestedTime
-        );
+        double timeScore =
+                calculateTimeScore(
+                        ride.getDepartureTime(),
+                        requestedTime
+                );
 
-        double detourScore = calculateDetourScore(
-                passengerRoute.distanceMeters(),
-                driverRoute.distanceMeters()
-        );
+        double detourScore =
+                calculateDetourScore(
+                        passengerRoute.distanceMeters(),
+                        driverRoute.distanceMeters()
+                );
 
         double totalScore =
-                (routeScore * 0.40)
-                        + (timeScore * 0.20)
-                        + (pickupScore * 0.15)
-                        + (destinationScore * 0.10)
-                        + (detourScore * 0.15);
+                (routeScore * ROUTE_WEIGHT)
+                        + (timeScore * TIME_WEIGHT)
+                        + (pickupScore * PICKUP_WEIGHT)
+                        + (destinationScore * DESTINATION_WEIGHT)
+                        + (detourScore * DETOUR_WEIGHT);
 
-        return new MatchScore(
-                round(totalScore),
-                round(routeScore),
-                round(timeScore),
-                round(pickupScore),
-                round(destinationScore),
-                round(detourScore)
+        MatchScore score =
+                new MatchScore(
+                        round(totalScore),
+                        round(routeScore),
+                        round(timeScore),
+                        round(pickupScore),
+                        round(destinationScore),
+                        round(detourScore)
+                );
+
+        log.info(
+                "Ride match calculated: rideId={}, total={}, route={}, time={}, pickup={}, destination={}, detour={}",
+                ride.getId(),
+                score.totalScore(),
+                score.routeScore(),
+                score.timeScore(),
+                score.pickupScore(),
+                score.destinationScore(),
+                score.detourScore()
         );
+
+        return score;
+    }
+
+    private RouteResponse calculateDriverRoute(
+            Ride ride
+    ) {
+
+        RouteRequest request =
+                new RouteRequest(
+                        ride.getPickupLatitude(),
+                        ride.getPickupLongitude(),
+                        ride.getDestinationLatitude(),
+                        ride.getDestinationLongitude()
+                );
+
+        try {
+
+            RouteResponse route =
+                    routeService.calculateRoute(request);
+
+            log.debug(
+                    "Driver route calculated using routing service: rideId={}",
+                    ride.getId()
+            );
+
+            return route;
+
+        } catch (Exception exception) {
+
+            log.warn(
+                    "Driver route unavailable. " +
+                    "Using fallback route: rideId={}, reason={}",
+                    ride.getId(),
+                    exception.getMessage()
+            );
+
+            return createFallbackRoute(request);
+        }
     }
 
     private double calculateRouteSimilarity(
@@ -91,18 +165,25 @@ public class RouteMatchingService {
             List<List<Double>> driverRoute
     ) {
 
-        if (passengerRoute.isEmpty() || driverRoute.isEmpty()) {
+        if (passengerRoute == null
+                || driverRoute == null
+                || passengerRoute.isEmpty()
+                || driverRoute.isEmpty()) {
+
             return 0;
         }
 
         int samples =
-                Math.min(passengerRoute.size(), 100);
+                Math.min(
+                        passengerRoute.size(),
+                        50
+                );
 
         int matchedPoints = 0;
 
         for (int i = 0; i < samples; i++) {
 
-            int index =
+            int passengerIndex =
                     (int) (
                             (long) i
                                     * passengerRoute.size()
@@ -112,7 +193,7 @@ public class RouteMatchingService {
             List<Double> passengerPoint =
                     passengerRoute.get(
                             Math.min(
-                                    index,
+                                    passengerIndex,
                                     passengerRoute.size() - 1
                             )
                     );
@@ -121,6 +202,11 @@ public class RouteMatchingService {
                     Double.MAX_VALUE;
 
             for (List<Double> driverPoint : driverRoute) {
+
+                if (driverPoint == null
+                        || driverPoint.size() < 2) {
+                    continue;
+                }
 
                 double distance =
                         haversine(
@@ -137,12 +223,16 @@ public class RouteMatchingService {
                         );
             }
 
-            if (minimumDistance <= 1.0) {
+            if (minimumDistance
+                    <= ROUTE_MATCH_THRESHOLD_METERS) {
+
                 matchedPoints++;
             }
         }
 
-        return matchedPoints * 100.0 / samples;
+        return samples == 0
+                ? 0
+                : matchedPoints * 100.0 / samples;
     }
 
     private double calculateDetourScore(
@@ -213,6 +303,9 @@ public class RouteMatchingService {
                         lon2
                 );
 
+        /*
+         * Distance is measured in kilometers here.
+         */
         if (distance <= 0.5) return 100;
         if (distance <= 1.0) return 90;
         if (distance <= 2.0) return 75;
@@ -222,6 +315,42 @@ public class RouteMatchingService {
         return 0;
     }
 
+    private RouteResponse createFallbackRoute(
+            RouteRequest request
+    ) {
+
+        double distanceMeters =
+                haversineDistanceMeters(
+                        request.pickupLatitude(),
+                        request.pickupLongitude(),
+                        request.destinationLatitude(),
+                        request.destinationLongitude()
+                );
+
+        double durationSeconds =
+                (distanceMeters / 1000.0)
+                        / FALLBACK_SPEED_KMH
+                        * 3600.0;
+
+        List<List<Double>> coordinates =
+                List.of(
+                        List.of(
+                                request.pickupLongitude(),
+                                request.pickupLatitude()
+                        ),
+                        List.of(
+                                request.destinationLongitude(),
+                                request.destinationLatitude()
+                        )
+                );
+
+        return new RouteResponse(
+                distanceMeters,
+                durationSeconds,
+                coordinates
+        );
+    }
+
     private double haversine(
             double lat1,
             double lon1,
@@ -229,7 +358,7 @@ public class RouteMatchingService {
             double lon2
     ) {
 
-        final double earthRadius = 6371.0;
+        final double earthRadiusKm = 6371.0;
 
         double dLat =
                 Math.toRadians(lat2 - lat1);
@@ -252,7 +381,22 @@ public class RouteMatchingService {
                         Math.sqrt(1 - a)
                 );
 
-        return earthRadius * c;
+        return earthRadiusKm * c;
+    }
+
+    private double haversineDistanceMeters(
+            double lat1,
+            double lon1,
+            double lat2,
+            double lon2
+    ) {
+
+        return haversine(
+                lat1,
+                lon1,
+                lat2,
+                lon2
+        ) * 1000.0;
     }
 
     private double round(double value) {

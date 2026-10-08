@@ -1,24 +1,29 @@
 package com.shareride.shareride_mobile_backend.config;
 
-import org.springframework.context.ApplicationContext;
+import com.shareride.shareride_mobile_backend.auth.JwtAuthenticationFilter;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-
-import jakarta.servlet.Filter;
 
 @Configuration
 public class SecurityConfig {
 
-    private final ApplicationContext applicationContext;
+    private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
-    public SecurityConfig(ApplicationContext applicationContext) {
-        this.applicationContext = applicationContext;
+    public SecurityConfig(
+            JwtAuthenticationFilter jwtAuthenticationFilter
+    ) {
+        this.jwtAuthenticationFilter =
+                jwtAuthenticationFilter;
     }
 
     @Bean
@@ -27,27 +32,49 @@ public class SecurityConfig {
     }
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http)
-            throws Exception {
-
-        Filter jwtAuthenticationFilter = applicationContext.getBeansOfType(Filter.class)
-                .values()
-                .stream()
-                .filter(filter -> filter.getClass().getSimpleName().equals("JwtAuthenticationFilter"))
-                .findFirst()
-                .orElseThrow(() -> new IllegalStateException("JWT authentication filter bean not found"));
+    public SecurityFilterChain securityFilterChain(
+            HttpSecurity http
+    ) throws Exception {
 
         http
             .csrf(csrf -> csrf.disable())
+
             .sessionManagement(session ->
-                    session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                    session.sessionCreationPolicy(
+                            SessionCreationPolicy.STATELESS
+                    )
             )
+
             .authorizeHttpRequests(auth -> auth
-                    .requestMatchers("/api/auth/login", "/api/auth/register")
+
+                    .requestMatchers(
+                            "/api/auth/login",
+                            "/api/auth/register",
+                            "/api/auth/reset-test-password"
+                    )
                     .permitAll()
+
+                    .requestMatchers(
+                            "/api/rides/find"
+                    )
+                    .authenticated()
+
+                    .requestMatchers(
+                            "/api/rides",
+                            "/api/rides/**"
+                    )
+                    .authenticated()
+
+                    .requestMatchers(
+                            "/api/routes",
+                            "/api/routes/**"
+                    )
+                    .authenticated()
+
                     .anyRequest()
                     .authenticated()
             )
+
             .addFilterBefore(
                     jwtAuthenticationFilter,
                     UsernamePasswordAuthenticationFilter.class
