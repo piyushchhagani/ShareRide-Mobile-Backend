@@ -9,6 +9,7 @@ import com.shareride.shareride_mobile_backend.user.UserRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
+import org.springframework.lang.NonNull;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -92,7 +93,7 @@ public class RideController {
 
     @PatchMapping("/{rideId}/status")
     public ResponseEntity<?> updateRideStatus(
-            @PathVariable Long rideId,
+            @PathVariable @NonNull Long rideId,
             @jakarta.validation.Valid @RequestBody UpdateRideStatusRequest request,
             Authentication authentication
     ) {
@@ -130,7 +131,7 @@ public class RideController {
 
     @GetMapping("/{rideId}")
     public ResponseEntity<RideResponse> getRide(
-            @PathVariable Long rideId
+            @PathVariable @NonNull Long rideId
     ) {
 
         return rideRepository

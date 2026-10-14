@@ -49,6 +49,7 @@ public class RouteService {
      * OpenRouteService expects:
      * [longitude, latitude]
      */
+    @SuppressWarnings("null")
     public RouteResult calculateRoute(
             double startLatitude,
             double startLongitude,

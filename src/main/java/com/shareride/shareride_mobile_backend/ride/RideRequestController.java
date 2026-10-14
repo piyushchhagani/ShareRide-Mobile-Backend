@@ -5,6 +5,7 @@ import org.springframework.transaction.annotation.Transactional;
 import com.shareride.shareride_mobile_backend.user.User;
 import com.shareride.shareride_mobile_backend.user.UserRepository;
 import org.springframework.http.ResponseEntity;
+import org.springframework.lang.NonNull;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
@@ -132,7 +133,7 @@ public class RideRequestController {
     // DRIVER SEES REQUESTS
     @GetMapping("/ride/{rideId}")
     public ResponseEntity<?> rideRequests(
-            @PathVariable Long rideId,
+            @PathVariable @NonNull Long rideId,
             Authentication authentication
     ) {
 
@@ -179,7 +180,7 @@ public class RideRequestController {
     @PatchMapping("/{requestId}")
     @Transactional
     public ResponseEntity<?> updateRequest(
-            @PathVariable Long requestId,
+            @PathVariable @NonNull Long requestId,
             @jakarta.validation.Valid @RequestBody UpdateRideRequestDto request,
             Authentication authentication
     ) {
