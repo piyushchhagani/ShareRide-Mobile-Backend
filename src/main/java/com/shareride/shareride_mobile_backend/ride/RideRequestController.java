@@ -1,5 +1,7 @@
 package com.shareride.shareride_mobile_backend.ride;
 
+import org.springframework.transaction.annotation.Transactional;
+
 import com.shareride.shareride_mobile_backend.user.User;
 import com.shareride.shareride_mobile_backend.user.UserRepository;
 import org.springframework.http.ResponseEntity;
@@ -175,6 +177,7 @@ public class RideRequestController {
 
     // DRIVER ACCEPTS / REJECTS
     @PatchMapping("/{requestId}")
+    @Transactional
     public ResponseEntity<?> updateRequest(
             @PathVariable Long requestId,
             @jakarta.validation.Valid @RequestBody UpdateRideRequestDto request,
@@ -230,10 +233,14 @@ public class RideRequestController {
                         .body(java.util.Map.of("message", "Not enough seats available."));
             }
 
-            ride.setAvailableSeats(
-                    ride.getAvailableSeats()
-                            - rideRequest.getRequestedSeats()
-            );
+            int remainingSeats = ride.getAvailableSeats()
+                    - rideRequest.getRequestedSeats();
+
+            ride.setAvailableSeats(remainingSeats);
+
+            if (remainingSeats == 0) {
+                ride.setStatus("FULL");
+            }
 
             rideRequest.setStatus("ACCEPTED");
 
