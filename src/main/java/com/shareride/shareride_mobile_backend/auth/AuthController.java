@@ -2,9 +2,12 @@ package com.shareride.shareride_mobile_backend.auth;
 
 import com.shareride.shareride_mobile_backend.user.User;
 import com.shareride.shareride_mobile_backend.user.UserRepository;
+import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
@@ -26,37 +29,37 @@ public class AuthController {
 
     @PostMapping("/register")
     public ResponseEntity<?> register(
-            @RequestBody RegisterRequest request
+            @Valid @RequestBody RegisterRequest request
     ) {
 
         if (userRepository.existsByEmail(request.email())) {
             return ResponseEntity.badRequest()
-                    .body("Email already registered");
+                    .body(Map.of("message", "Email already registered"));
         }
 
         User user = new User();
 
-        user.setName(request.name());
-        user.setEmail(request.email());
+        user.setName(request.name().trim());
+        user.setEmail(request.email().trim().toLowerCase());
         user.setPassword(
                 passwordEncoder.encode(request.password())
         );
-        user.setPhone(request.phone());
+        user.setPhone(request.phone() != null ? request.phone().trim() : null);
 
         userRepository.save(user);
 
         return ResponseEntity.ok(
-                "User registered successfully"
+                Map.of("message", "User registered successfully")
         );
     }
 
     @PostMapping("/login")
     public ResponseEntity<?> login(
-            @RequestBody LoginRequest request
+            @Valid @RequestBody LoginRequest request
     ) {
 
         User user = userRepository
-                .findByEmail(request.email())
+                .findByEmail(request.email().trim().toLowerCase())
                 .orElse(null);
 
         if (user == null ||
@@ -67,7 +70,7 @@ public class AuthController {
 
             return ResponseEntity
                     .status(401)
-                    .body("Invalid email or password");
+                    .body(Map.of("message", "Invalid email or password"));
         }
 
         String token =
@@ -85,16 +88,16 @@ public class AuthController {
     }
 
     @GetMapping("/me")
-    public ResponseEntity<?> me(
+    public ResponseEntity<UserResponse> me(
             org.springframework.security.core.Authentication authentication
     ) {
 
         User user = userRepository
                 .findByEmail(authentication.getName())
-                .orElseThrow();
+                .orElseThrow(() -> new IllegalStateException("Authenticated user not found"));
 
         return ResponseEntity.ok(
-                new LoginResponse(
+                new UserResponse(
                         user.getId(),
                         user.getName(),
                         user.getEmail(),
@@ -102,4 +105,4 @@ public class AuthController {
                 )
         );
     }
-}
+}

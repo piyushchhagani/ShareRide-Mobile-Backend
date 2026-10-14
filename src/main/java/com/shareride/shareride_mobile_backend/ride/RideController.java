@@ -24,6 +24,7 @@ public class RideController {
 
     private static final long MAX_DEPARTURE_DIFFERENCE_MINUTES = 60;
     private static final double MIN_MATCH_SCORE = 35.0;
+    private static final double MIN_ROUTE_SCORE = 50.0;
     private static final double FALLBACK_AVERAGE_SPEED_KMH = 30.0;
     private static final double EARTH_RADIUS_METERS = 6_371_000.0;
 
@@ -50,7 +51,7 @@ public class RideController {
 
     @PostMapping
     public ResponseEntity<RideResponse> createRide(
-            @RequestBody CreateRideRequest request,
+            @jakarta.validation.Valid @RequestBody CreateRideRequest request,
             Authentication authentication
     ) {
 
@@ -83,6 +84,44 @@ public class RideController {
         );
 
         return ResponseEntity.ok(toResponse(savedRide));
+    }
+
+    // -------------------------------------------------------------------------
+    // UPDATE RIDE STATUS (CANCEL / COMPLETE)
+    // -------------------------------------------------------------------------
+
+    @PatchMapping("/{rideId}/status")
+    public ResponseEntity<?> updateRideStatus(
+            @PathVariable Long rideId,
+            @jakarta.validation.Valid @RequestBody UpdateRideStatusRequest request,
+            Authentication authentication
+    ) {
+
+        User driver = getAuthenticatedUser(authentication);
+
+        Ride ride = rideRepository.findById(rideId).orElse(null);
+        if (ride == null) {
+            return ResponseEntity.status(404)
+                    .body(java.util.Map.of("message", "Ride not found"));
+        }
+
+        if (!ride.getDriver().getId().equals(driver.getId())) {
+            return ResponseEntity.status(403)
+                    .body(java.util.Map.of("message", "Only the ride driver can update the ride status"));
+        }
+
+        ride.setStatus(request.status().toUpperCase());
+        ride.setUpdatedAt(java.time.LocalDateTime.now());
+        Ride saved = rideRepository.save(ride);
+
+        log.info(
+                "Ride status updated: rideId={}, driverId={}, newStatus={}",
+                rideId,
+                driver.getId(),
+                saved.getStatus()
+        );
+
+        return ResponseEntity.ok(toResponse(saved));
     }
 
     // -------------------------------------------------------------------------
@@ -144,7 +183,7 @@ public class RideController {
 
     @PostMapping("/find")
     public ResponseEntity<List<RideResponse>> findRides(
-            @RequestBody FindRideRequest request,
+            @jakarta.validation.Valid @RequestBody FindRideRequest request,
             Authentication authentication
     ) {
 
@@ -229,7 +268,9 @@ public class RideController {
                                 )
                         )
                         .filter(scoredRide ->
-                                scoredRide.score().totalScore()
+                                scoredRide.score().routeScore()
+                                        >= MIN_ROUTE_SCORE
+                                        && scoredRide.score().totalScore()
                                         >= MIN_MATCH_SCORE
                         )
                         .sorted(

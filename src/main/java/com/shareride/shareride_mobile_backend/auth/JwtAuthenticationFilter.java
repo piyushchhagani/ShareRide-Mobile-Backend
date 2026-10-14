@@ -5,6 +5,8 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -15,6 +17,9 @@ import java.io.IOException;
 
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(JwtAuthenticationFilter.class);
 
     private final JwtService jwtService;
 
@@ -30,32 +35,17 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
     ) throws ServletException, IOException {
 
         String path = request.getRequestURI();
-
-        System.out.println(
-                "JWT -> " +
-                request.getMethod() +
-                " " +
-                path
-        );
+        log.debug("JWT -> {} {}", request.getMethod(), path);
 
         String authHeader = request.getHeader("Authorization");
 
         if (authHeader == null || authHeader.isBlank()) {
-
-            System.out.println(
-                    "JWT -> NO AUTHORIZATION HEADER"
-            );
-
             filterChain.doFilter(request, response);
             return;
         }
 
         if (!authHeader.startsWith("Bearer ")) {
-
-            System.out.println(
-                    "JWT -> INVALID AUTHORIZATION FORMAT"
-            );
-
+            log.warn("JWT -> Invalid Authorization header format for {}", path);
             filterChain.doFilter(request, response);
             return;
         }
@@ -63,11 +53,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         String token = authHeader.substring(7).trim();
 
         if (token.isBlank()) {
-
-            System.out.println(
-                    "JWT -> EMPTY TOKEN"
-            );
-
+            log.warn("JWT -> Empty token provided for {}", path);
             filterChain.doFilter(request, response);
             return;
         }
@@ -77,13 +63,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String email = jwtService.extractEmail(token);
 
             if (email == null || email.isBlank()) {
-
-                System.out.println(
-                        "JWT -> TOKEN HAS NO EMAIL"
-                );
-
+                log.warn("JWT -> Token contained no email subject");
                 SecurityContextHolder.clearContext();
-
                 filterChain.doFilter(request, response);
                 return;
             }
@@ -99,30 +80,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     .getContext()
                     .setAuthentication(authentication);
 
-            System.out.println(
-                    "JWT -> AUTHENTICATED: " + email
-            );
-
-            System.out.println(
-                    "JWT -> AUTHENTICATED FLAG: " +
-                    authentication.isAuthenticated()
-            );
+            log.debug("JWT -> Authenticated user: {}", email);
 
         } catch (Exception e) {
 
             SecurityContextHolder.clearContext();
-
-            System.out.println(
-                    "JWT -> INVALID TOKEN: " +
-                    e.getClass().getSimpleName()
-            );
-
-            System.out.println(
-                    "JWT -> REASON: " +
-                    e.getMessage()
-            );
+            log.warn("JWT -> Invalid token for {}: {} - {}", path, e.getClass().getSimpleName(), e.getMessage());
         }
 
         filterChain.doFilter(request, response);
     }
-}
+}
