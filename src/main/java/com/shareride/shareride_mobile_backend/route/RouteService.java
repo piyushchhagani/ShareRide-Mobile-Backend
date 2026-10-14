@@ -1,5 +1,7 @@
 package com.shareride.shareride_mobile_backend.route;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -18,6 +20,9 @@ import java.util.regex.Pattern;
 
 @Service
 public class RouteService {
+
+    private static final Logger log =
+            LoggerFactory.getLogger(RouteService.class);
 
     private static final Pattern COORDINATE_PATTERN = Pattern.compile(
             "\\[\\s*([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)\\s*,\\s*([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)\\s*\\]"
@@ -52,7 +57,7 @@ public class RouteService {
     ) {
 
         String url = baseUrl
-                + "/openrouteservice/v2/directions/driving-car/geojson";
+                + "/v2/directions/driving-car/geojson";
 
         try {
             HttpHeaders headers = new HttpHeaders();
@@ -118,9 +123,9 @@ public class RouteService {
 
         } catch (Exception exception) {
 
-            System.err.println(
-                    "OpenRouteService request failed: "
-                            + exception.getMessage()
+            log.warn(
+                    "OpenRouteService request failed: {}. Using straight-line fallback.",
+                    exception.getMessage()
             );
 
             /*

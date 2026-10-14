@@ -29,7 +29,7 @@ public class RouteMatchingService {
      * 500 meters gives us a practical similarity comparison
      * while still being meaningful for campus ride sharing.
      */
-    private static final double ROUTE_MATCH_THRESHOLD_METERS = 500.0;
+    private static final double ROUTE_MATCH_THRESHOLD_KM = 0.5;
 
     private static final double FALLBACK_SPEED_KMH = 30.0;
 
@@ -45,31 +45,45 @@ public class RouteMatchingService {
             LocalDateTime requestedTime
     ) {
 
+        if (ride == null) {
+            throw new IllegalArgumentException("Ride is required for route matching");
+        }
+
+        if (requestedTime == null) {
+            throw new IllegalArgumentException("Requested departure time is required");
+        }
+
+        RouteResponse safePassengerRoute = ensureUsableRoute(
+                passengerRoute,
+                ride.getPickupLatitude(),
+                ride.getPickupLongitude(),
+                ride.getDestinationLatitude(),
+                ride.getDestinationLongitude()
+        );
+
         RouteResponse driverRoute =
                 calculateDriverRoute(ride);
 
         double routeScore =
                 calculateRouteSimilarity(
-                        passengerRoute.coordinates(),
+                        safePassengerRoute.coordinates(),
                         driverRoute.coordinates()
                 );
+
+        List<Double> passengerPickup = safePassengerRoute.coordinates().get(0);
 
         double pickupScore =
                 calculateDistanceScore(
                         ride.getPickupLatitude(),
                         ride.getPickupLongitude(),
-                        passengerRoute.coordinates()
-                                .get(0)
-                                .get(1),
-                        passengerRoute.coordinates()
-                                .get(0)
-                                .get(0)
+                        passengerPickup.get(1),
+                        passengerPickup.get(0)
                 );
 
         List<Double> passengerDestination =
-                passengerRoute.coordinates()
+                safePassengerRoute.coordinates()
                         .get(
-                                passengerRoute.coordinates().size() - 1
+                                safePassengerRoute.coordinates().size() - 1
                         );
 
         double destinationScore =
@@ -88,7 +102,7 @@ public class RouteMatchingService {
 
         double detourScore =
                 calculateDetourScore(
-                        passengerRoute.distanceMeters(),
+                        safePassengerRoute.distanceMeters(),
                         driverRoute.distanceMeters()
                 );
 
@@ -123,6 +137,36 @@ public class RouteMatchingService {
         return score;
     }
 
+    private RouteResponse ensureUsableRoute(
+            RouteResponse route,
+            double pickupLatitude,
+            double pickupLongitude,
+            double destinationLatitude,
+            double destinationLongitude
+    ) {
+        if (route == null
+                || route.coordinates() == null
+                || route.coordinates().size() < 2
+                || !isCoordinate(route.coordinates().get(0))
+                || !isCoordinate(route.coordinates().get(route.coordinates().size() - 1))) {
+            return createFallbackRoute(new RouteRequest(
+                    pickupLatitude,
+                    pickupLongitude,
+                    destinationLatitude,
+                    destinationLongitude
+            ));
+        }
+
+        return route;
+    }
+
+    private boolean isCoordinate(List<Double> point) {
+        return point != null
+                && point.size() >= 2
+                && point.get(0) != null
+                && point.get(1) != null;
+    }
+
     private RouteResponse calculateDriverRoute(
             Ride ride
     ) {
@@ -145,19 +189,13 @@ public class RouteMatchingService {
                             ride.getDestinationLongitude()
                     );
 
-            RouteResponse route =
-                    new RouteResponse(
-                            extractDistanceMeters(routeResult),
-                            extractDurationSeconds(routeResult),
-                            extractCoordinates(routeResult)
-                    );
-
-            log.debug(
-                    "Driver route calculated using routing service: rideId={}",
-                    ride.getId()
+            return new RouteResponse(
+                    routeResult.getDistanceMeters(),
+                    routeResult.getDurationSeconds(),
+                    routeResult.getPoints().stream()
+                            .map(point -> List.of(point.getLongitude(), point.getLatitude()))
+                            .toList()
             );
-
-            return route;
 
         } catch (Exception exception) {
 
@@ -236,7 +274,7 @@ public class RouteMatchingService {
             }
 
             if (minimumDistance
-                    <= ROUTE_MATCH_THRESHOLD_METERS) {
+                    <= ROUTE_MATCH_THRESHOLD_KM) {
 
                 matchedPoints++;
             }
@@ -325,121 +363,6 @@ public class RouteMatchingService {
         if (distance <= 10.0) return 25;
 
         return 0;
-    }
-
-    private double extractDistanceMeters(
-            RouteService.RouteResult routeResult
-    ) {
-        return extractNumericValue(
-                routeResult,
-                "distanceMeters",
-                "distance",
-                "distanceKm",
-                "distanceInMeters",
-                "distanceValue"
-        );
-    }
-
-    private double extractDurationSeconds(
-            RouteService.RouteResult routeResult
-    ) {
-        return extractNumericValue(
-                routeResult,
-                "durationSeconds",
-                "duration",
-                "durationInSeconds",
-                "estimatedSeconds",
-                "timeSeconds",
-                "seconds"
-        );
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<List<Double>> extractCoordinates(
-            RouteService.RouteResult routeResult
-    ) {
-        Object value =
-                extractValue(
-                        routeResult,
-                        "coordinates",
-                        "routeCoordinates",
-                        "points",
-                        "path"
-                );
-
-        if (value instanceof List<?>) {
-            return (List<List<Double>>) value;
-        }
-
-        return java.util.Collections.emptyList();
-    }
-
-    private double extractNumericValue(
-            Object target,
-            String... candidateNames
-    ) {
-        Object value =
-                extractValue(
-                        target,
-                        candidateNames
-                );
-
-        if (value instanceof Number number) {
-            return number.doubleValue();
-        }
-
-        return 0.0;
-    }
-
-    private Object extractValue(
-            Object target,
-            String... candidateNames
-    ) {
-        if (target == null) {
-            return null;
-        }
-
-        Class<?> targetClass = target.getClass();
-
-        for (String candidateName : candidateNames) {
-            String capitalized =
-                    Character.toUpperCase(candidateName.charAt(0))
-                            + candidateName.substring(1);
-
-            for (String methodName : new String[] {
-                    candidateName,
-                    "get" + capitalized,
-                    "is" + capitalized
-            }) {
-                try {
-                    java.lang.reflect.Method method =
-                            targetClass.getMethod(methodName);
-                    Object value = method.invoke(target);
-                    if (value != null) {
-                        return value;
-                    }
-                } catch (NoSuchMethodException
-                         | IllegalAccessException
-                         | java.lang.reflect.InvocationTargetException ignored) {
-                    // Ignore and continue to the next candidate.
-                }
-            }
-
-            try {
-                java.lang.reflect.Field field =
-                        targetClass.getDeclaredField(candidateName);
-                field.setAccessible(true);
-                Object value = field.get(target);
-                if (value != null) {
-                    return value;
-                }
-            } catch (NoSuchFieldException
-                     | IllegalAccessException ignored) {
-                // Ignore and continue to the next candidate.
-            }
-        }
-
-        return null;
     }
 
     private RouteResponse createFallbackRoute(

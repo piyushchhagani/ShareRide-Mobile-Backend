@@ -29,25 +29,35 @@ public class RideRequestController {
     // PASSENGER REQUESTS RIDE
     @PostMapping
     public ResponseEntity<?> createRequest(
-            @RequestBody CreateRideRequestDto request,
+            @jakarta.validation.Valid @RequestBody CreateRideRequestDto request,
             Authentication authentication
     ) {
 
         User passenger =
                 userRepository
                         .findByEmail(authentication.getName())
-                        .orElseThrow();
+                        .orElse(null);
+
+        if (passenger == null) {
+            return ResponseEntity.status(401)
+                    .body(java.util.Map.of("message", "User not found"));
+        }
 
         Ride ride =
                 rideRepository
                         .findById(request.rideId())
-                        .orElseThrow();
+                        .orElse(null);
+
+        if (ride == null) {
+            return ResponseEntity.status(404)
+                    .body(java.util.Map.of("message", "Ride not found"));
+        }
 
         if (ride.getDriver().getId()
                 .equals(passenger.getId())) {
 
             return ResponseEntity.badRequest()
-                    .body("You cannot request your own ride.");
+                    .body(java.util.Map.of("message", "You cannot request your own ride."));
         }
 
         int seats =
@@ -57,12 +67,12 @@ public class RideRequestController {
 
         if (seats <= 0) {
             return ResponseEntity.badRequest()
-                    .body("Seats must be greater than zero.");
+                    .body(java.util.Map.of("message", "Seats must be greater than zero."));
         }
 
         if (ride.getAvailableSeats() < seats) {
             return ResponseEntity.badRequest()
-                    .body("Not enough seats available.");
+                    .body(java.util.Map.of("message", "Not enough seats available."));
         }
 
         if (requestRepository
@@ -73,7 +83,7 @@ public class RideRequestController {
                 .isPresent()) {
 
             return ResponseEntity.badRequest()
-                    .body("You already requested this ride.");
+                    .body(java.util.Map.of("message", "You already requested this ride."));
         }
 
         RideRequest rideRequest =
@@ -101,7 +111,12 @@ public class RideRequestController {
         User passenger =
                 userRepository
                         .findByEmail(authentication.getName())
-                        .orElseThrow();
+                        .orElse(null);
+
+        if (passenger == null) {
+            return ResponseEntity.status(401)
+                    .body(java.util.Map.of("message", "User not found"));
+        }
 
         return ResponseEntity.ok(
                 requestRepository
@@ -122,20 +137,28 @@ public class RideRequestController {
         User driver =
                 userRepository
                         .findByEmail(authentication.getName())
-                        .orElseThrow();
+                        .orElse(null);
+
+        if (driver == null) {
+            return ResponseEntity.status(401)
+                    .body(java.util.Map.of("message", "User not found"));
+        }
 
         Ride ride =
                 rideRepository
                         .findById(rideId)
-                        .orElseThrow();
+                        .orElse(null);
+
+        if (ride == null) {
+            return ResponseEntity.status(404)
+                    .body(java.util.Map.of("message", "Ride not found"));
+        }
 
         if (!ride.getDriver().getId()
                 .equals(driver.getId())) {
 
             return ResponseEntity.status(403)
-                    .body(
-                            "Only the ride driver can view requests."
-                    );
+                    .body(java.util.Map.of("message", "Only the ride driver can view requests."));
         }
 
         return ResponseEntity.ok(
@@ -154,19 +177,29 @@ public class RideRequestController {
     @PatchMapping("/{requestId}")
     public ResponseEntity<?> updateRequest(
             @PathVariable Long requestId,
-            @RequestBody UpdateRideRequestDto request,
+            @jakarta.validation.Valid @RequestBody UpdateRideRequestDto request,
             Authentication authentication
     ) {
 
         User driver =
                 userRepository
                         .findByEmail(authentication.getName())
-                        .orElseThrow();
+                        .orElse(null);
+
+        if (driver == null) {
+            return ResponseEntity.status(401)
+                    .body(java.util.Map.of("message", "User not found"));
+        }
 
         RideRequest rideRequest =
                 requestRepository
                         .findById(requestId)
-                        .orElseThrow();
+                        .orElse(null);
+
+        if (rideRequest == null) {
+            return ResponseEntity.status(404)
+                    .body(java.util.Map.of("message", "Ride request not found"));
+        }
 
         Ride ride = rideRequest.getRide();
 
@@ -174,13 +207,13 @@ public class RideRequestController {
                 .equals(driver.getId())) {
 
             return ResponseEntity.status(403)
-                    .body("Only the driver can respond.");
+                    .body(java.util.Map.of("message", "Only the driver can respond."));
         }
 
         if (!"PENDING".equals(rideRequest.getStatus())) {
 
             return ResponseEntity.badRequest()
-                    .body("Request has already been processed.");
+                    .body(java.util.Map.of("message", "Request has already been processed."));
         }
 
         String action =
@@ -194,7 +227,7 @@ public class RideRequestController {
                     < rideRequest.getRequestedSeats()) {
 
                 return ResponseEntity.badRequest()
-                        .body("Not enough seats available.");
+                        .body(java.util.Map.of("message", "Not enough seats available."));
             }
 
             ride.setAvailableSeats(
@@ -221,9 +254,7 @@ public class RideRequestController {
         } else {
 
             return ResponseEntity.badRequest()
-                    .body(
-                            "Action must be ACCEPT or REJECT."
-                    );
+                    .body(java.util.Map.of("message", "Action must be ACCEPT or REJECT."));
         }
 
         RideRequest saved =
