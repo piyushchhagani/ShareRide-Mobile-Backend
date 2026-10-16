@@ -31,6 +31,7 @@ public class RideRequestController {
 
     // PASSENGER REQUESTS RIDE
     @PostMapping
+    @Transactional
     public ResponseEntity<?> createRequest(
             @jakarta.validation.Valid @RequestBody CreateRideRequestDto request,
             Authentication authentication
@@ -48,12 +49,17 @@ public class RideRequestController {
 
         Ride ride =
                 rideRepository
-                        .findById(request.rideId())
+                        .findByIdForUpdate(request.rideId())
                         .orElse(null);
 
         if (ride == null) {
             return ResponseEntity.status(404)
                     .body(java.util.Map.of("message", "Ride not found"));
+        }
+
+        if (!"ACTIVE".equals(ride.getStatus())) {
+            return ResponseEntity.badRequest()
+                    .body(java.util.Map.of("message", "This ride is no longer accepting requests."));
         }
 
         if (ride.getDriver().getId()
@@ -78,24 +84,28 @@ public class RideRequestController {
                     .body(java.util.Map.of("message", "Not enough seats available."));
         }
 
-        if (requestRepository
+        RideRequest existingRequest = requestRepository
                 .findByRideIdAndPassengerId(
                         ride.getId(),
                         passenger.getId()
                 )
-                .isPresent()) {
+                .orElse(null);
 
+        if (existingRequest != null
+                && !"REJECTED".equals(existingRequest.getStatus())) {
             return ResponseEntity.badRequest()
-                    .body(java.util.Map.of("message", "You already requested this ride."));
+                    .body(java.util.Map.of("message", "You already have an active request for this ride."));
         }
 
-        RideRequest rideRequest =
-                new RideRequest();
+        RideRequest rideRequest = existingRequest != null
+                ? existingRequest
+                : new RideRequest();
 
         rideRequest.setRide(ride);
         rideRequest.setPassenger(passenger);
         rideRequest.setRequestedSeats(seats);
         rideRequest.setStatus("PENDING");
+        rideRequest.setRespondedAt(null);
 
         RideRequest saved =
                 requestRepository.save(rideRequest);
@@ -205,7 +215,14 @@ public class RideRequestController {
                     .body(java.util.Map.of("message", "Ride request not found"));
         }
 
-        Ride ride = rideRequest.getRide();
+        Ride ride = rideRepository
+                .findByIdForUpdate(rideRequest.getRide().getId())
+                .orElse(null);
+
+        if (ride == null) {
+            return ResponseEntity.status(404)
+                    .body(java.util.Map.of("message", "Ride not found"));
+        }
 
         if (!ride.getDriver().getId()
                 .equals(driver.getId())) {
@@ -226,6 +243,11 @@ public class RideRequestController {
                         .toUpperCase();
 
         if ("ACCEPT".equals(action)) {
+
+            if (!"ACTIVE".equals(ride.getStatus())) {
+                return ResponseEntity.badRequest()
+                        .body(java.util.Map.of("message", "This ride is no longer accepting passengers."));
+            }
 
             if (ride.getAvailableSeats()
                     < rideRequest.getRequestedSeats()) {

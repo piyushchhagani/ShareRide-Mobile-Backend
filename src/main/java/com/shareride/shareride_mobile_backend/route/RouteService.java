@@ -11,6 +11,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -38,6 +39,13 @@ public class RouteService {
 
     public RouteService() {
         this.restTemplate = new RestTemplate();
+    }
+
+    @PostConstruct
+    private void validateApiKey() {
+        if (apiKey == null || apiKey.isBlank()) {
+            throw new IllegalStateException("ORS_API_KEY is not configured.");
+        }
     }
 
     /**

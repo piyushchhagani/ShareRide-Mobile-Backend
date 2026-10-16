@@ -81,14 +81,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
                     .getContext()
                     .setAuthentication(authentication);
 
-            log.debug("JWT -> Authenticated user: {}", email);
-
         } catch (Exception e) {
 
             SecurityContextHolder.clearContext();
-            log.warn("JWT -> Invalid token for {}: {} - {}", path, e.getClass().getSimpleName(), e.getMessage());
+            log.warn("JWT -> Invalid token for {}: {}", path, e.getClass().getSimpleName());
         }
 
         filterChain.doFilter(request, response);
     }
-}
+}

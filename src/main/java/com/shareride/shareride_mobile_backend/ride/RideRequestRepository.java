@@ -1,7 +1,6 @@
 package com.shareride.shareride_mobile_backend.ride;
 
 import org.springframework.data.jpa.repository.JpaRepository;
-
 import java.util.List;
 import java.util.Optional;
 
