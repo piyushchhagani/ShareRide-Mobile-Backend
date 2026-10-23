@@ -32,7 +32,8 @@ public class RouteController {
                 result.getDurationSeconds(),
                 result.getPoints().stream()
                         .map(point -> List.of(point.getLongitude(), point.getLatitude()))
-                        .toList()
+                        .toList(),
+                result.isApproximate()
         ));
     }
 }

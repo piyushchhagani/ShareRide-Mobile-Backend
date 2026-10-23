@@ -13,6 +13,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.UUID;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -82,8 +83,12 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, String>> handleGeneralException(
             Exception ex
     ) {
-        log.error("Unhandled exception: ", ex);
+        String errorId = UUID.randomUUID().toString();
+        log.error("Unhandled request exception. errorId={}", errorId, ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                .body(Map.of("message", "An unexpected error occurred. Please try again."));
+                .body(Map.of(
+                        "message", "An unexpected error occurred. Please try again.",
+                        "errorId", errorId
+                ));
     }
 }

@@ -1,6 +1,8 @@
 package com.shareride.shareride_mobile_backend.ride;
 
 import org.springframework.transaction.annotation.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.shareride.shareride_mobile_backend.user.User;
 import com.shareride.shareride_mobile_backend.user.UserRepository;
@@ -14,6 +16,8 @@ import java.time.LocalDateTime;
 @RestController
 @RequestMapping("/api/ride-requests")
 public class RideRequestController {
+
+    private static final Logger log = LoggerFactory.getLogger(RideRequestController.class);
 
     private final RideRequestRepository requestRepository;
     private final RideRepository rideRepository;
@@ -207,7 +211,7 @@ public class RideRequestController {
 
         RideRequest rideRequest =
                 requestRepository
-                        .findById(requestId)
+                        .findByIdForUpdate(requestId)
                         .orElse(null);
 
         if (rideRequest == null) {
@@ -224,11 +228,11 @@ public class RideRequestController {
                     .body(java.util.Map.of("message", "Ride not found"));
         }
 
-        if (!ride.getDriver().getId()
-                .equals(driver.getId())) {
-
+        if (!ride.getDriver().getId().equals(driver.getId())) {
+            log.warn("Ride request response forbidden: requestId={}, rideId={}, authenticatedDriverId={}, actualDriverId={}",
+                    requestId, ride.getId(), driver.getId(), ride.getDriver().getId());
             return ResponseEntity.status(403)
-                    .body(java.util.Map.of("message", "Only the driver can respond."));
+                    .body(java.util.Map.of("message", "Only the driver who offered this ride can respond. Please sign in with the ride owner's account."));
         }
 
         if (!"PENDING".equals(rideRequest.getStatus())) {

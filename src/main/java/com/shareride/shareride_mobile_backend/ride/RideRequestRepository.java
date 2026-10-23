@@ -1,11 +1,18 @@
 package com.shareride.shareride_mobile_backend.ride;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.repository.query.Param;
+import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
 
 public interface RideRequestRepository
         extends JpaRepository<RideRequest, Long> {
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select r from RideRequest r where r.id = :id")
+    Optional<RideRequest> findByIdForUpdate(@Param("id") Long id);
 
     List<RideRequest> findByPassengerId(Long passengerId);
 

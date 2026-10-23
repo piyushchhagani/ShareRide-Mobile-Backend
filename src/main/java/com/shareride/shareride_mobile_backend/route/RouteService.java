@@ -127,7 +127,8 @@ public class RouteService {
             return new RouteResult(
                     distanceMeters,
                     durationSeconds,
-                    routePoints
+                    routePoints,
+                    false
             );
 
         } catch (Exception exception) {
@@ -175,7 +176,8 @@ public class RouteService {
             return new RouteResult(
                     distanceMeters,
                     durationSeconds,
-                    fallbackPoints
+                    fallbackPoints,
+                    true
             );
         }
     }
@@ -319,15 +321,18 @@ public class RouteService {
         private final double distanceMeters;
         private final double durationSeconds;
         private final List<RoutePoint> points;
+        private final boolean approximate;
 
         public RouteResult(
                 double distanceMeters,
                 double durationSeconds,
-                List<RoutePoint> points
+                List<RoutePoint> points,
+                boolean approximate
         ) {
             this.distanceMeters = distanceMeters;
             this.durationSeconds = durationSeconds;
             this.points = points;
+            this.approximate = approximate;
         }
 
         public double getDistanceMeters() {
@@ -340,6 +345,10 @@ public class RouteService {
 
         public List<RoutePoint> getPoints() {
             return points;
+        }
+
+        public boolean isApproximate() {
+            return approximate;
         }
     }
 
