@@ -3,6 +3,7 @@ package com.shareride.shareride_mobile_backend.ride;
 import com.shareride.shareride_mobile_backend.user.User;
 import jakarta.persistence.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
@@ -46,6 +47,9 @@ public class Ride {
 
     @Column(name = "vehicle_number")
     private String vehicleNumber;
+
+    @Column(name = "price_per_seat", precision = 10, scale = 2)
+    private BigDecimal pricePerSeat;
 
     @Column(nullable = false)
     private String status = "ACTIVE";
@@ -151,6 +155,14 @@ public class Ride {
 
     public void setVehicleNumber(String vehicleNumber) {
         this.vehicleNumber = vehicleNumber;
+    }
+
+    public BigDecimal getPricePerSeat() {
+        return pricePerSeat;
+    }
+
+    public void setPricePerSeat(BigDecimal pricePerSeat) {
+        this.pricePerSeat = pricePerSeat;
     }
 
     public String getStatus() {

@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: shareride-postgres
+    environment:
+      POSTGRES_DB: shareride_mobile
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+    ports:
+      - "5432:5432"
+    volumes:
+      - shareride_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d shareride_mobile"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build: .
+    container_name: shareride-backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8084
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/shareride_mobile
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-123456}
+      ORS_API_KEY: ${ORS_API_KEY:-local-dev-ors-key-uses-haversine-fallback}
+      ORS_BASE_URL: ${ORS_BASE_URL:-https://api.openrouteservice.org}
+      JWT_SECRET: ${JWT_SECRET:-shareride-local-dev-jwt-secret-key-minimum-32-chars-2026}
+      EXPOSE_RESET_TOKEN: ${EXPOSE_RESET_TOKEN:-true}
+    ports:
+      - "8084:8084"
+
+volumes:
+  shareride_pgdata:

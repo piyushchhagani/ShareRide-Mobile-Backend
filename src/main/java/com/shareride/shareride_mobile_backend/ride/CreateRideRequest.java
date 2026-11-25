@@ -1,8 +1,10 @@
 package com.shareride.shareride_mobile_backend.ride;
 
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public record CreateRideRequest(
@@ -32,5 +34,8 @@ public record CreateRideRequest(
         Integer availableSeats,
 
         String vehicleType,
-        String vehicleNumber
-) {}
+        String vehicleNumber,
+
+        @DecimalMin(value = "0.00", message = "Price per seat cannot be negative")
+        BigDecimal pricePerSeat
+) {}

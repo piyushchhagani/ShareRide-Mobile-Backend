@@ -36,6 +36,9 @@ public class RideRequest {
     @Column(name = "responded_at")
     private LocalDateTime respondedAt;
 
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
     @PrePersist
     void onCreate() {
         createdAt = LocalDateTime.now();
@@ -97,5 +100,13 @@ public class RideRequest {
 
     public void setRespondedAt(LocalDateTime respondedAt) {
         this.respondedAt = respondedAt;
+    }
+
+    public LocalDateTime getCancelledAt() {
+        return cancelledAt;
+    }
+
+    public void setCancelledAt(LocalDateTime cancelledAt) {
+        this.cancelledAt = cancelledAt;
     }
 }

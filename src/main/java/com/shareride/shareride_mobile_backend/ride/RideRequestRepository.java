@@ -14,11 +14,13 @@ public interface RideRequestRepository
     @org.springframework.data.jpa.repository.Query("select r from RideRequest r where r.id = :id")
     Optional<RideRequest> findByIdForUpdate(@Param("id") Long id);
 
-    List<RideRequest> findByPassengerId(Long passengerId);
+    List<RideRequest> findByPassengerIdOrderByCreatedAtDesc(Long passengerId);
 
-    List<RideRequest> findByRideId(Long rideId);
+    List<RideRequest> findByPassengerIdAndStatusInOrderByCreatedAtDesc(Long passengerId, List<String> statuses);
 
-    List<RideRequest> findByRideIdAndStatus(
+    List<RideRequest> findByRideIdOrderByCreatedAtDesc(Long rideId);
+
+    List<RideRequest> findByRideIdAndStatusOrderByCreatedAtDesc(
             Long rideId,
             String status
     );
@@ -27,4 +29,9 @@ public interface RideRequestRepository
             Long rideId,
             Long passengerId
     );
+
+    @org.springframework.data.jpa.repository.Query(
+            "select count(rr) from RideRequest rr where rr.passenger.id = :passengerId and rr.status = 'ACCEPTED' and rr.ride.status = 'COMPLETED'"
+    )
+    long countCompletedByPassengerId(@Param("passengerId") Long passengerId);
 }

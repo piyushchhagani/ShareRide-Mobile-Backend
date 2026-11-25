@@ -86,10 +86,13 @@ public class SecurityConfig {
                     .requestMatchers(HttpMethod.OPTIONS, "/**")
                     .permitAll()
 
-                    // Public authentication endpoints
+                    // Public authentication & docs endpoints
                     .requestMatchers(
                             "/api/auth/login",
-                            "/api/auth/register"
+                            "/api/auth/register",
+                            "/api/auth/forgot-password",
+                            "/api/auth/reset-password",
+                            "/api/docs"
                     )
                     .permitAll()
 

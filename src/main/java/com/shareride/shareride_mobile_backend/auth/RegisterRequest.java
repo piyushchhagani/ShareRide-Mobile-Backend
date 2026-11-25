@@ -2,6 +2,7 @@ package com.shareride.shareride_mobile_backend.auth;
 
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public record RegisterRequest(
@@ -17,5 +18,9 @@ public record RegisterRequest(
         @Size(min = 6, max = 100, message = "Password must be at least 6 characters")
         String password,
 
-        String phone
-) {}
+        @Size(max = 20, message = "Phone number must be at most 20 characters")
+        String phone,
+
+        @Pattern(regexp = "^(STUDENT|FACULTY)$", message = "Role must be STUDENT or FACULTY")
+        String role
+) {}

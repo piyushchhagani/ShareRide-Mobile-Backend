@@ -1,5 +1,8 @@
 package com.shareride.shareride_mobile_backend.ride;
 
+import com.shareride.shareride_mobile_backend.notification.NotificationService;
+import com.shareride.shareride_mobile_backend.payment.FareService;
+import com.shareride.shareride_mobile_backend.rating.RatingRepository;
 import com.shareride.shareride_mobile_backend.route.RouteRequest;
 import com.shareride.shareride_mobile_backend.route.RouteResponse;
 import com.shareride.shareride_mobile_backend.route.RouteService;
@@ -23,27 +26,39 @@ public class RideController {
     private static final Logger log =
             LoggerFactory.getLogger(RideController.class);
 
-    private static final long MAX_DEPARTURE_DIFFERENCE_MINUTES = 60;
-    private static final double MIN_MATCH_SCORE = 35.0;
-    private static final double MIN_ROUTE_SCORE = 50.0;
+    private static final long MAX_DEPARTURE_DIFFERENCE_MINUTES = 120;
+    private static final double MIN_MATCH_SCORE = 25.0;
+    private static final double MIN_ROUTE_SCORE = 30.0;
     private static final double FALLBACK_AVERAGE_SPEED_KMH = 30.0;
     private static final double EARTH_RADIUS_METERS = 6_371_000.0;
 
     private final RideRepository rideRepository;
+    private final RideRequestRepository rideRequestRepository;
     private final UserRepository userRepository;
     private final RouteService routeService;
     private final RouteMatchingService routeMatchingService;
+    private final NotificationService notificationService;
+    private final RatingRepository ratingRepository;
+    private final FareService fareService;
 
     public RideController(
             RideRepository rideRepository,
+            RideRequestRepository rideRequestRepository,
             UserRepository userRepository,
             RouteService routeService,
-            RouteMatchingService routeMatchingService
+            RouteMatchingService routeMatchingService,
+            NotificationService notificationService,
+            RatingRepository ratingRepository,
+            FareService fareService
     ) {
         this.rideRepository = rideRepository;
+        this.rideRequestRepository = rideRequestRepository;
         this.userRepository = userRepository;
         this.routeService = routeService;
         this.routeMatchingService = routeMatchingService;
+        this.notificationService = notificationService;
+        this.ratingRepository = ratingRepository;
+        this.fareService = fareService;
     }
 
     // -------------------------------------------------------------------------
@@ -75,6 +90,16 @@ public class RideController {
 
         ride.setVehicleType(request.vehicleType());
         ride.setVehicleNumber(request.vehicleNumber());
+        ride.setPricePerSeat(
+                request.pricePerSeat() != null
+                        ? request.pricePerSeat()
+                        : fareService.suggestFarePerSeat(
+                                request.pickupLatitude(),
+                                request.pickupLongitude(),
+                                request.destinationLatitude(),
+                                request.destinationLongitude()
+                        )
+        );
 
         Ride savedRide = rideRepository.save(ride);
 
@@ -114,6 +139,33 @@ public class RideController {
         ride.setStatus(request.status().toUpperCase());
         ride.setUpdatedAt(java.time.LocalDateTime.now());
         Ride saved = rideRepository.save(ride);
+
+        String newStatus = saved.getStatus();
+        if ("CANCELLED".equals(newStatus) || "COMPLETED".equals(newStatus)) {
+            List<RideRequest> requests = rideRequestRepository.findByRideIdOrderByCreatedAtDesc(rideId);
+            for (RideRequest req : requests) {
+                if (("PENDING".equals(req.getStatus()) || "ACCEPTED".equals(req.getStatus()))
+                        && req.getPassenger().isBookingUpdatesEnabled()) {
+                    if ("CANCELLED".equals(newStatus)) {
+                        notificationService.createNotification(
+                                req.getPassenger(),
+                                "RIDE_CANCELLED",
+                                "Ride cancelled",
+                                driver.getName() + " cancelled ride #" + rideId + ".",
+                                saved
+                        );
+                    } else if ("ACCEPTED".equals(req.getStatus())) {
+                        notificationService.createNotification(
+                                req.getPassenger(),
+                                "RIDE_COMPLETED",
+                                "Ride completed",
+                                "Ride #" + rideId + " with " + driver.getName() + " is marked completed. You can now rate your experience!",
+                                saved
+                        );
+                    }
+                }
+            }
+        }
 
         log.info(
                 "Ride status updated: rideId={}, driverId={}, newStatus={}",
@@ -163,14 +215,27 @@ public class RideController {
 
     @GetMapping("/mine")
     public ResponseEntity<List<RideResponse>> getMyRides(
+            @RequestParam(required = false) List<String> status,
             Authentication authentication
     ) {
 
         User driver = getAuthenticatedUser(authentication);
 
+        List<Ride> rawRides;
+        if (status != null && !status.isEmpty()) {
+            List<String> normalized = status.stream()
+                    .filter(s -> s != null && !s.isBlank())
+                    .map(s -> s.trim().toUpperCase())
+                    .toList();
+            rawRides = normalized.isEmpty()
+                    ? rideRepository.findByDriverIdOrderByDepartureTimeDesc(driver.getId())
+                    : rideRepository.findByDriverIdAndStatusInOrderByDepartureTimeDesc(driver.getId(), normalized);
+        } else {
+            rawRides = rideRepository.findByDriverIdOrderByDepartureTimeDesc(driver.getId());
+        }
+
         List<RideResponse> rides =
-                rideRepository
-                        .findByDriverId(driver.getId())
+                rawRides
                         .stream()
                         .map(this::toResponse)
                         .toList();
@@ -224,6 +289,12 @@ public class RideController {
                                         request.departureTime()
                                 )
                         )
+                        .filter(ride ->
+                                matchesVehicleType(
+                                        ride,
+                                        request.vehicleType()
+                                )
+                        )
                         .toList();
 
         log.info(
@@ -258,6 +329,8 @@ public class RideController {
          *
          * Calculate the compatibility score for each candidate.
          */
+        java.util.Comparator<ScoredRide> comparator = createSearchComparator(request.sortBy());
+
         List<RideResponse> results =
                 candidates
                         .stream()
@@ -274,13 +347,7 @@ public class RideController {
                                         && scoredRide.score().totalScore()
                                         >= MIN_MATCH_SCORE
                         )
-                        .sorted(
-                                (first, second) ->
-                                        Double.compare(
-                                                second.score().totalScore(),
-                                                first.score().totalScore()
-                                        )
-                        )
+                        .sorted(comparator)
                         .map(scoredRide ->
                                 toResponse(
                                         scoredRide.ride(),
@@ -288,6 +355,16 @@ public class RideController {
                                 )
                         )
                         .toList();
+
+        if (request.page() != null && request.size() != null && request.page() >= 0 && request.size() > 0) {
+            int fromIndex = request.page() * request.size();
+            if (fromIndex >= results.size()) {
+                results = List.of();
+            } else {
+                int toIndex = Math.min(results.size(), fromIndex + request.size());
+                results = results.subList(fromIndex, toIndex);
+            }
+        }
 
         log.info(
                 "Ride search completed: candidates={}, matches={}",
@@ -308,6 +385,35 @@ public class RideController {
     ) {
 
         return ride.getAvailableSeats() >= requestedSeats;
+    }
+
+    private boolean matchesVehicleType(Ride ride, String vehicleTypeFilter) {
+        if (vehicleTypeFilter == null || vehicleTypeFilter.isBlank() || "ALL".equalsIgnoreCase(vehicleTypeFilter.trim())) {
+            return true;
+        }
+        if (ride.getVehicleType() == null) {
+            return false;
+        }
+        return ride.getVehicleType().toLowerCase().contains(vehicleTypeFilter.trim().toLowerCase());
+    }
+
+    private java.util.Comparator<ScoredRide> createSearchComparator(String sortBy) {
+        if ("PRICE_ASC".equalsIgnoreCase(sortBy)) {
+            return java.util.Comparator.comparing(
+                    (ScoredRide sr) -> sr.ride().getPricePerSeat() != null
+                            ? sr.ride().getPricePerSeat()
+                            : java.math.BigDecimal.valueOf(Double.MAX_VALUE)
+            ).thenComparing((first, second) ->
+                    Double.compare(second.score().totalScore(), first.score().totalScore()));
+        }
+        if ("DEPARTURE_ASC".equalsIgnoreCase(sortBy)) {
+            return java.util.Comparator.comparing(
+                    (ScoredRide sr) -> sr.ride().getDepartureTime()
+            ).thenComparing((first, second) ->
+                    Double.compare(second.score().totalScore(), first.score().totalScore()));
+        }
+        return (first, second) ->
+                Double.compare(second.score().totalScore(), first.score().totalScore());
     }
 
     private boolean isWithinDepartureWindow(
@@ -537,46 +643,23 @@ public class RideController {
     private RideResponse toResponse(
             Ride ride
     ) {
-
-        return new RideResponse(
-                ride.getId(),
-                ride.getDriver().getId(),
-                ride.getDriver().getName(),
-
-                ride.getPickupAddress(),
-                ride.getPickupLatitude(),
-                ride.getPickupLongitude(),
-
-                ride.getDestinationAddress(),
-                ride.getDestinationLatitude(),
-                ride.getDestinationLongitude(),
-
-                ride.getDepartureTime(),
-
-                ride.getAvailableSeats(),
-
-                ride.getVehicleType(),
-                ride.getVehicleNumber(),
-
-                ride.getStatus(),
-
-                null,
-                null,
-                null,
-                null,
-                null,
-                null
-        );
+        return toResponse(ride, null);
     }
 
     private RideResponse toResponse(
             Ride ride,
             MatchScore score
     ) {
+        Long driverId = ride.getDriver().getId();
+        Double rawAvg = ratingRepository.findAverageScoreByRatedUserId(driverId);
+        long totalRatings = ratingRepository.countByRatedUserId(driverId);
+        Double avg = (rawAvg != null && totalRatings > 0)
+                ? Math.round(rawAvg * 10.0) / 10.0
+                : null;
 
         return new RideResponse(
                 ride.getId(),
-                ride.getDriver().getId(),
+                driverId,
                 ride.getDriver().getName(),
 
                 ride.getPickupAddress(),
@@ -593,15 +676,19 @@ public class RideController {
 
                 ride.getVehicleType(),
                 ride.getVehicleNumber(),
+                ride.getPricePerSeat(),
 
                 ride.getStatus(),
 
-                score.totalScore(),
-                score.routeScore(),
-                score.timeScore(),
-                score.pickupScore(),
-                score.destinationScore(),
-                score.detourScore()
+                score != null ? score.totalScore() : null,
+                score != null ? score.routeScore() : null,
+                score != null ? score.timeScore() : null,
+                score != null ? score.pickupScore() : null,
+                score != null ? score.destinationScore() : null,
+                score != null ? score.detourScore() : null,
+
+                avg,
+                totalRatings
         );
     }
 

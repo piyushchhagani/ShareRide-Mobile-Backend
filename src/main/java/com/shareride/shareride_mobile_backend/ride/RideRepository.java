@@ -11,7 +11,11 @@ import jakarta.persistence.LockModeType;
 
 public interface RideRepository extends JpaRepository<Ride, Long> {
 
-    List<Ride> findByDriverId(Long driverId);
+    List<Ride> findByDriverIdOrderByDepartureTimeDesc(Long driverId);
+
+    List<Ride> findByDriverIdAndStatusInOrderByDepartureTimeDesc(Long driverId, List<String> statuses);
+
+    long countByDriverIdAndStatus(Long driverId, String status);
 
     List<Ride> findByStatus(String status);
 

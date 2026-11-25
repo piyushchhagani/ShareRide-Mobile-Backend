@@ -9,6 +9,13 @@ public record RideRequestResponse(
         String passengerName,
         String status,
         Integer requestedSeats,
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+        LocalDateTime cancelledAt,
+        Long driverId,
+        String driverName,
+        String pickupAddress,
+        String destinationAddress,
+        LocalDateTime departureTime,
+        String rideStatus
 ) {
 }

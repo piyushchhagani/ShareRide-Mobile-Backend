@@ -1,5 +1,6 @@
 package com.shareride.shareride_mobile_backend.ride;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public record RideResponse(
@@ -21,6 +22,7 @@ public record RideResponse(
 
         String vehicleType,
         String vehicleNumber,
+        BigDecimal pricePerSeat,
 
         String status,
 
@@ -29,6 +31,9 @@ public record RideResponse(
         Double timeScore,
         Double pickupScore,
         Double destinationScore,
-        Double detourScore
+        Double detourScore,
+
+        Double driverAverageRating,
+        long driverTotalRatings
 ) {
 }

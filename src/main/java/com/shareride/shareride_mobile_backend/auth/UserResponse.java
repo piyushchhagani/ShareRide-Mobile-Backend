@@ -4,5 +4,11 @@ public record UserResponse(
         Long id,
         String name,
         String email,
-        String role
+        String role,
+        String phone,
+        String avatarUrl,
+        boolean rideUpdatesEnabled,
+        boolean bookingUpdatesEnabled,
+        boolean productUpdatesEnabled,
+        boolean locationAssistanceEnabled
 ) {}

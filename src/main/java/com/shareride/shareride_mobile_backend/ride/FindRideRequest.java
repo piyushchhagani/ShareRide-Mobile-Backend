@@ -22,5 +22,10 @@ public record FindRideRequest(
 
         @NotNull(message = "Seats count is required")
         @Min(value = 1, message = "Seats must be at least 1")
-        Integer seats
-) {}
+        Integer seats,
+
+        String vehicleType,
+        String sortBy,
+        Integer page,
+        Integer size
+) {}

@@ -25,11 +25,11 @@ public class RouteMatchingService {
     private static final double DETOUR_WEIGHT = 0.15;
 
     /*
-     * A 1-meter threshold is too strict for route comparison.
-     * 500 meters gives us a practical similarity comparison
-     * while still being meaningful for campus ride sharing.
+     * 1.0 km corridor threshold balances parallel campus/city roads
+     * with meaningful route similarity when matching partial legs.
      */
-    private static final double ROUTE_MATCH_THRESHOLD_KM = 0.5;
+    private static final double ROUTE_MATCH_THRESHOLD_KM = 1.0;
+    private static final int FALLBACK_SEGMENTS = 20;
 
     private static final double FALLBACK_SPEED_KMH = 30.0;
 
@@ -214,75 +214,67 @@ public class RouteMatchingService {
             List<List<Double>> passengerRoute,
             List<List<Double>> driverRoute
     ) {
-
         if (passengerRoute == null
                 || driverRoute == null
                 || passengerRoute.isEmpty()
                 || driverRoute.isEmpty()) {
-
             return 0;
         }
 
-        int samples =
-                Math.min(
-                        passengerRoute.size(),
-                        50
-                );
+        List<List<Double>> densePassenger = densifyIfStraightLine(passengerRoute);
+        List<List<Double>> denseDriver = densifyIfStraightLine(driverRoute);
 
+        double passengerOverlap = calculateDirectionalOverlap(densePassenger, denseDriver);
+        double driverOverlap = calculateDirectionalOverlap(denseDriver, densePassenger);
+        return Math.max(passengerOverlap, driverOverlap);
+    }
+
+    private List<List<Double>> densifyIfStraightLine(List<List<Double>> route) {
+        if (route.size() != 2 || !isCoordinate(route.get(0)) || !isCoordinate(route.get(1))) {
+            return route;
+        }
+        return interpolateSegment(
+                route.get(0).get(1),
+                route.get(0).get(0),
+                route.get(1).get(1),
+                route.get(1).get(0)
+        );
+    }
+
+    private double calculateDirectionalOverlap(
+            List<List<Double>> sourceRoute,
+            List<List<Double>> targetRoute
+    ) {
+        int samples = Math.min(sourceRoute.size(), 50);
         int matchedPoints = 0;
 
         for (int i = 0; i < samples; i++) {
-
-            int passengerIndex =
-                    (int) (
-                            (long) i
-                                    * passengerRoute.size()
-                                    / samples
-                    );
-
-            List<Double> passengerPoint =
-                    passengerRoute.get(
-                            Math.min(
-                                    passengerIndex,
-                                    passengerRoute.size() - 1
-                            )
-                    );
-
-            double minimumDistance =
-                    Double.MAX_VALUE;
-
-            for (List<Double> driverPoint : driverRoute) {
-
-                if (driverPoint == null
-                        || driverPoint.size() < 2) {
-                    continue;
-                }
-
-                double distance =
-                        haversine(
-                                passengerPoint.get(1),
-                                passengerPoint.get(0),
-                                driverPoint.get(1),
-                                driverPoint.get(0)
-                        );
-
-                minimumDistance =
-                        Math.min(
-                                minimumDistance,
-                                distance
-                        );
+            int sourceIndex = (int) ((long) i * sourceRoute.size() / samples);
+            List<Double> sourcePoint = sourceRoute.get(Math.min(sourceIndex, sourceRoute.size() - 1));
+            if (sourcePoint == null || sourcePoint.size() < 2) {
+                continue;
             }
 
-            if (minimumDistance
-                    <= ROUTE_MATCH_THRESHOLD_KM) {
+            double minimumDistance = Double.MAX_VALUE;
+            for (List<Double> targetPoint : targetRoute) {
+                if (targetPoint == null || targetPoint.size() < 2) {
+                    continue;
+                }
+                double distance = haversine(
+                        sourcePoint.get(1),
+                        sourcePoint.get(0),
+                        targetPoint.get(1),
+                        targetPoint.get(0)
+                );
+                minimumDistance = Math.min(minimumDistance, distance);
+            }
 
+            if (minimumDistance <= ROUTE_MATCH_THRESHOLD_KM) {
                 matchedPoints++;
             }
         }
 
-        return samples == 0
-                ? 0
-                : matchedPoints * 100.0 / samples;
+        return samples == 0 ? 0 : matchedPoints * 100.0 / samples;
     }
 
     private double calculateDetourScore(
@@ -334,6 +326,8 @@ public class RouteMatchingService {
         if (difference <= 30) return 75;
         if (difference <= 45) return 55;
         if (difference <= 60) return 35;
+        if (difference <= 90) return 20;
+        if (difference <= 120) return 10;
 
         return 0;
     }
@@ -382,23 +376,34 @@ public class RouteMatchingService {
                         / FALLBACK_SPEED_KMH
                         * 3600.0;
 
-        List<List<Double>> coordinates =
-                List.of(
-                        List.of(
-                                request.pickupLongitude(),
-                                request.pickupLatitude()
-                        ),
-                        List.of(
-                                request.destinationLongitude(),
-                                request.destinationLatitude()
-                        )
-                );
+        List<List<Double>> coordinates = interpolateSegment(
+                request.pickupLatitude(),
+                request.pickupLongitude(),
+                request.destinationLatitude(),
+                request.destinationLongitude()
+        );
 
         return new RouteResponse(
                 distanceMeters,
                 durationSeconds,
                 coordinates
         );
+    }
+
+    private List<List<Double>> interpolateSegment(
+            double startLat,
+            double startLon,
+            double endLat,
+            double endLon
+    ) {
+        List<List<Double>> points = new java.util.ArrayList<>(FALLBACK_SEGMENTS + 1);
+        for (int i = 0; i <= FALLBACK_SEGMENTS; i++) {
+            double t = (double) i / FALLBACK_SEGMENTS;
+            double lat = startLat + (endLat - startLat) * t;
+            double lon = startLon + (endLon - startLon) * t;
+            points.add(List.of(lon, lat));
+        }
+        return points;
     }
 
     private double haversine(
