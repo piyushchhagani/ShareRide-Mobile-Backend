@@ -8,6 +8,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -15,6 +16,7 @@ import jakarta.annotation.PostConstruct;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -24,6 +26,8 @@ public class RouteService {
 
     private static final Logger log =
             LoggerFactory.getLogger(RouteService.class);
+
+    private static final String OSRM_BASE_URL = "https://router.project-osrm.org";
 
     private static final Pattern COORDINATE_PATTERN = Pattern.compile(
             "\\[\\s*([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)\\s*,\\s*([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)\\s*\\]"
@@ -38,7 +42,10 @@ public class RouteService {
     private String baseUrl;
 
     public RouteService() {
-        this.restTemplate = new RestTemplate();
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(3000);
+        factory.setReadTimeout(5000);
+        this.restTemplate = new RestTemplate(factory);
     }
 
     @PostConstruct
@@ -64,122 +71,127 @@ public class RouteService {
             double endLatitude,
             double endLongitude
     ) {
-
-        String url = baseUrl
-                + "/v2/directions/driving-car/geojson";
+        if (!isPlaceholderApiKey(apiKey)) {
+            try {
+                return fetchFromOrs(startLatitude, startLongitude, endLatitude, endLongitude);
+            } catch (Exception exception) {
+                log.warn("OpenRouteService request failed: {}. Trying OSRM fallback.", exception.getMessage());
+            }
+        }
 
         try {
-            HttpHeaders headers = new HttpHeaders();
-
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.setAccept(List.of(
-                    MediaType.valueOf("application/geo+json"),
-                    MediaType.APPLICATION_JSON
-            ));
-
-            headers.set("Authorization", apiKey);
-
-            Map<String, Object> body = new HashMap<>();
-
-            List<List<Double>> coordinates = new ArrayList<>();
-
-            // ORS requires [longitude, latitude]
-            coordinates.add(List.of(startLongitude, startLatitude));
-            coordinates.add(List.of(endLongitude, endLatitude));
-
-            body.put("coordinates", coordinates);
-
-            HttpEntity<Map<String, Object>> request =
-                    new HttpEntity<>(body, headers);
-
-            ResponseEntity<String> response = restTemplate.exchange(
-                    url,
-                    HttpMethod.POST,
-                    request,
-                    String.class
-            );
-
-            if (!response.getStatusCode().is2xxSuccessful()
-                    || response.getBody() == null
-                    || response.getBody().isBlank()) {
-
-                throw new RuntimeException(
-                        "Invalid routing response from OpenRouteService"
-                );
-            }
-
-            double distanceMeters =
-                    extractNumberAfterKey(response.getBody(), "distance");
-
-            double durationSeconds =
-                    extractNumberAfterKey(response.getBody(), "duration");
-
-            List<RoutePoint> routePoints = extractRoutePoints(
-                    response.getBody()
-            );
-
-            if (routePoints.isEmpty()) {
-                throw new RuntimeException(
-                        "OpenRouteService returned no route coordinates"
-                );
-            }
-
-            return new RouteResult(
-                    distanceMeters,
-                    durationSeconds,
-                    routePoints,
-                    false
-            );
-
+            return fetchFromOsrm(startLatitude, startLongitude, endLatitude, endLongitude);
         } catch (Exception exception) {
-
-            log.warn(
-                    "OpenRouteService request failed: {}. Using straight-line fallback.",
-                    exception.getMessage()
-            );
-
-            /*
-             * Keep the application usable even if ORS is temporarily
-             * unavailable. The matching service can use this fallback
-             * route information.
-             */
-            double distanceMeters = calculateStraightLineDistance(
-                    startLatitude,
-                    startLongitude,
-                    endLatitude,
-                    endLongitude
-            );
-
-            /*
-             * Fallback assumption:
-             * average driving speed = 30 km/h
-             */
-            double durationSeconds =
-                    (distanceMeters / 1000.0) / 30.0 * 3600.0;
-
-            List<RoutePoint> fallbackPoints = new ArrayList<>();
-
-            fallbackPoints.add(
-                    new RoutePoint(
-                            startLatitude,
-                            startLongitude
-                    )
-            );
-
-            fallbackPoints.add(
-                    new RoutePoint(
-                            endLatitude,
-                            endLongitude
-                    )
-            );
-
-            return new RouteResult(
-                    distanceMeters,
-                    durationSeconds,
-                    fallbackPoints,
-                    true
-            );
+            log.warn("OSRM request failed: {}. Using straight-line fallback.", exception.getMessage());
         }
+
+        return buildStraightLineFallback(startLatitude, startLongitude, endLatitude, endLongitude);
+    }
+
+    private boolean isPlaceholderApiKey(String key) {
+        return key == null || key.isBlank() || key.startsWith("local-dev") || key.startsWith("REPLACE_");
+    }
+
+    private RouteResult fetchFromOrs(
+            double startLatitude,
+            double startLongitude,
+            double endLatitude,
+            double endLongitude
+    ) {
+        String url = baseUrl + "/v2/directions/driving-car/geojson";
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        headers.setAccept(List.of(
+                MediaType.valueOf("application/geo+json"),
+                MediaType.APPLICATION_JSON
+        ));
+        headers.set("Authorization", apiKey);
+
+        Map<String, Object> body = new HashMap<>();
+        List<List<Double>> coordinates = new ArrayList<>();
+        // ORS requires [longitude, latitude]
+        coordinates.add(List.of(startLongitude, startLatitude));
+        coordinates.add(List.of(endLongitude, endLatitude));
+        body.put("coordinates", coordinates);
+
+        ResponseEntity<String> response = restTemplate.exchange(
+                url,
+                HttpMethod.POST,
+                new HttpEntity<>(body, headers),
+                String.class
+        );
+
+        return parseGeoJsonRoute(response, "OpenRouteService");
+    }
+
+    private RouteResult fetchFromOsrm(
+            double startLatitude,
+            double startLongitude,
+            double endLatitude,
+            double endLongitude
+    ) {
+        String url = String.format(
+                Locale.US,
+                "%s/route/v1/driving/%.6f,%.6f;%.6f,%.6f?overview=full&geometries=geojson",
+                OSRM_BASE_URL,
+                startLongitude,
+                startLatitude,
+                endLongitude,
+                endLatitude
+        );
+
+        ResponseEntity<String> response = restTemplate.getForEntity(url, String.class);
+        return parseGeoJsonRoute(response, "OSRM");
+    }
+
+    private RouteResult parseGeoJsonRoute(ResponseEntity<String> response, String provider) {
+        if (!response.getStatusCode().is2xxSuccessful()
+                || response.getBody() == null
+                || response.getBody().isBlank()) {
+            throw new RuntimeException("Invalid routing response from " + provider);
+        }
+
+        String responseBody = response.getBody();
+        double distanceMeters = extractNumberAfterKey(responseBody, "distance");
+        double durationSeconds = extractNumberAfterKey(responseBody, "duration");
+        List<RoutePoint> routePoints = extractRoutePoints(responseBody);
+
+        if (routePoints.isEmpty()) {
+            throw new RuntimeException(provider + " returned no route coordinates");
+        }
+
+        return new RouteResult(distanceMeters, durationSeconds, routePoints, false);
+    }
+
+    private RouteResult buildStraightLineFallback(
+            double startLatitude,
+            double startLongitude,
+            double endLatitude,
+            double endLongitude
+    ) {
+        /*
+         * Keep the application usable even if routing providers are temporarily
+         * unavailable. The matching service can use this fallback route.
+         */
+        double distanceMeters = calculateStraightLineDistance(
+                startLatitude,
+                startLongitude,
+                endLatitude,
+                endLongitude
+        );
+
+        /*
+         * Fallback assumption:
+         * average driving speed = 30 km/h
+         */
+        double durationSeconds = (distanceMeters / 1000.0) / 30.0 * 3600.0;
+
+        List<RoutePoint> fallbackPoints = new ArrayList<>();
+        fallbackPoints.add(new RoutePoint(startLatitude, startLongitude));
+        fallbackPoints.add(new RoutePoint(endLatitude, endLongitude));
+
+        return new RouteResult(distanceMeters, durationSeconds, fallbackPoints, true);
     }
 
     /**
